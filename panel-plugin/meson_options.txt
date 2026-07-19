@@ -1,0 +1,6 @@
+option(
+  'script',
+  type: 'string',
+  value: '/usr/bin/python3 /home/dp/MyProjects/xfce-zai-limits/zai_limits.py',
+  description: 'Command the plugin spawns to get JSON (zai_limits.py --format json). Should not include --format json, that is appended.',
+)

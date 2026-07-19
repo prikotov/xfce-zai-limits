@@ -455,10 +455,10 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     )
     parts.append(f"<click>{_notify_click_command()}</click>")
 
-    # Rich tooltip. Everything is monospace so NBSP padding lines up.
+    # Rich tooltip — scoped to THIS bar's metric (codex OR z.ai), so the two
+    # genmon items have DIFFERENT tooltips matching their bar.
     NL = chr(10)
-    tip: list[str] = ["<tt><b>z.ai · limits</b></tt>", ""]
-    tip.append(_pango(COLOR_LABEL, "codex (ChatGPT):"))
+    is_zai = metric in ("zai", "z.ai", "glm")
 
     def window_line(name: str, w: Optional[Window]) -> str:
         name_part = _pad_right(f"{name}:", 8)
@@ -477,48 +477,43 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
             + _pango(COLOR_DIM, f"({_fmt_ts(w.resets_at)})")
         )
 
-    # Pick the right labels for whatever windows z.ai returned.
-    weekly = snap.primary if snap.primary and snap.primary.is_weekly else (
-        snap.secondary if snap.secondary and snap.secondary.is_weekly else None
-    )
-    five_h = snap.primary if snap.primary and snap.primary.is_five_hour else (
-        snap.secondary if snap.secondary and snap.secondary.is_five_hour else None
-    )
-    tip.append(window_line("weekly", weekly))
-    tip.append(window_line("5h", five_h))
-    # Surface any window we couldn't classify by name.
-    for w in (snap.primary, snap.secondary):
-        if w and not w.is_weekly and not w.is_five_hour:
-            tip.append(window_line(w.label, w))
-
-    # Credits.
-    if snap.credits:
-        tip.append("")
-        if snap.credits.unlimited:
-            cred = _pango(COLOR_OK, "unlimited")
-        elif snap.credits.has_credits:
-            cred = _pango(COLOR_OK, f"balance {_fmt_balance(snap.credits.balance)}")
-        else:
-            cred = _pango(COLOR_DIM, f"balance {_fmt_balance(snap.credits.balance)}")
-        tip.append(_pango(COLOR_LABEL, _pad_right("credits:", 8)) + NBSP + cred)
-
-    # z.ai (GLM) subscription usage — separate provider, live API.
-    if snap.zai_tokens or snap.zai_time:
-        tip.append("")
-        label = "z.ai (GLM"
+    tip: list[str] = []
+    if is_zai:
+        header = "z.ai (GLM"
         if snap.zai_level:
-            label += f", {snap.zai_level}"
-        label += "):"
-        tip.append(_pango(COLOR_LABEL, label))
+            header += f", {snap.zai_level}"
+        header += ")"
+        tip.append(f"<tt><b>{header}</b></tt>")
+        tip.append("")
         tip.append(window_line("weekly", snap.zai_tokens))
         tip.append(window_line("5h", snap.zai_time))
-
-    # Provenance — important: data is read from a log, not live.
-    tip.append("")
-    tip.append(_pango(COLOR_DIM, f"updated {_human_age(snap.ts, now)}"))
-    if snap.source:
-        tip.append(_pango(COLOR_DIM, f"source: {snap.source}"))
-    tip.append(_pango(COLOR_DIM, "read from Codex logs — refreshes as you use Codex"))
+        tip.append("")
+        tip.append(_pango(COLOR_DIM, "live API · click for details"))
+    else:
+        tip.append("<tt><b>codex (ChatGPT)</b></tt>")
+        tip.append("")
+        weekly = snap.primary if snap.primary and snap.primary.is_weekly else (
+            snap.secondary if snap.secondary and snap.secondary.is_weekly else None
+        )
+        five_h = snap.primary if snap.primary and snap.primary.is_five_hour else (
+            snap.secondary if snap.secondary and snap.secondary.is_five_hour else None
+        )
+        tip.append(window_line("weekly", weekly))
+        tip.append(window_line("5h", five_h))
+        for w in (snap.primary, snap.secondary):
+            if w and not w.is_weekly and not w.is_five_hour:
+                tip.append(window_line(w.label, w))
+        if snap.credits:
+            tip.append("")
+            if snap.credits.unlimited:
+                cred = _pango(COLOR_OK, "unlimited")
+            elif snap.credits.has_credits:
+                cred = _pango(COLOR_OK, f"balance {_fmt_balance(snap.credits.balance)}")
+            else:
+                cred = _pango(COLOR_DIM, f"balance {_fmt_balance(snap.credits.balance)}")
+            tip.append(_pango(COLOR_LABEL, _pad_right("credits:", 8)) + NBSP + cred)
+        tip.append("")
+        tip.append(_pango(COLOR_DIM, f"updated {_human_age(snap.ts, now)} · from Codex logs"))
 
     parts.append(f"<tool>{NL.join(tip)}</tool>")
     return "\n".join(parts)

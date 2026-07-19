@@ -342,8 +342,8 @@ def _build_zai_result(cached: dict) -> Optional[dict]:
         )
 
     return {
-        "tokens": mk(cached.get("tokens"), weekly=True),
-        "time": mk(cached.get("time"), weekly=False),
+        "tokens": mk(cached.get("tokens"), weekly=False),  # TOKENS_LIMIT = 5h rolling ("plan usage")
+        "time": mk(cached.get("time"), weekly=True),        # TIME_LIMIT  = weekly tools quota (search/web-reader/zread)
         "level": cached.get("level"),
         "ts": float(cached.get("ts", 0) or 0),
     }
@@ -485,8 +485,8 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
         header += ")"
         tip.append(f"<tt><b>{header}</b></tt>")
         tip.append("")
-        tip.append(window_line("weekly", snap.zai_tokens))
-        tip.append(window_line("5h", snap.zai_time))
+        tip.append(window_line("5h", snap.zai_tokens))     # TOKENS_LIMIT = 5h rolling
+        tip.append(window_line("weekly", snap.zai_time))   # TIME_LIMIT = weekly tools quota
         tip.append("")
         tip.append(_pango(COLOR_DIM, "live API · click for details"))
     else:
@@ -615,7 +615,7 @@ def format_text(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> s
         lines.append("")
         level = f", {snap.zai_level}" if snap.zai_level else ""
         lines.append(f"z.ai (GLM{level})")
-        for name, w in (("weekly", snap.zai_tokens), ("5h", snap.zai_time)):
+        for name, w in (("5h", snap.zai_tokens), ("weekly", snap.zai_time)):
             if w:
                 lines.append(
                     f"  {name:<7} {w.used_percent:>5.1f}%  "

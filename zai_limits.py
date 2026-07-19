@@ -444,6 +444,15 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     metric = os.environ.get("ZAI_BAR_METRIC", "codex").strip().lower()
     bar_pct = zai_pct if metric in ("zai", "z.ai", "glm") else codex_pct
     parts.append(f"<bar>{_clamp_bar(bar_pct)}</bar>")
+    # Color the bar by threshold (genmon's <bar> is theme-blue by default).
+    # genmon 4.3.0 supports a <css> tag styling the plugin widget tree.
+    css_color = _color_for(bar_pct)
+    parts.append(
+        "<css>"
+        f"progressbar progress {{ background-color: {css_color}; }} "
+        "progressbar trough { background-color: #3c3c3c; }"
+        "</css>"
+    )
     parts.append(f"<click>{_notify_click_command()}</click>")
 
     # Rich tooltip. Everything is monospace so NBSP padding lines up.

@@ -257,12 +257,6 @@ def _xml_escape(text: str) -> str:
     )
 
 
-def _bar_char(pct: float, width: int = 5) -> str:
-    """A compact unicode bar like ▮▮▮▮▯ for use inside <txt>."""
-    pct = max(0.0, min(100.0, pct))
-    filled = int(round(pct / 100 * width))
-    return "▮" * filled + "▯" * (width - filled)
-
 
 def _human_remaining(resets_at: int, now: float) -> str:
     if not resets_at or resets_at <= now:
@@ -330,8 +324,9 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
         txt = f"({_pango(COLOR_DIM, 'z.ai')}) {_pango(COLOR_DIM, 'no data')}"
         parts.append(f"<txt>{txt}</txt>")
         parts.append("<bar>0</bar>")
+        parts.append(f"<click>{_notify_click_command()}</click>")
         tip = "<tt><b>z.ai limits</b></tt>\n" + _pango(
-            COLOR_DIM, "No Codex rollout data found. Start a Codex session."
+            COLOR_DIM, "No Codex rollout data found. Click to retry."
         )
         parts.append(f"<tooltip>{tip}</tooltip>")
         parts.append("<icon>org.xfce.genmon</icon>")
@@ -341,14 +336,14 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     pct = dom.used_percent
     color = _color_for(pct)
 
-    # Compact on-panel label: "z.ai 75% ▮▮▮▮▯" with the bar colored.
-    txt = (
-        _pango(COLOR_LABEL, "z.ai ")
-        + _pango(color, f"{pct:.0f}% ")
-        + _pango(color, _bar_char(pct))
-    )
+    # Compact on-panel label: "z.ai 75%". The graphical <bar> carries the
+    # progress bar; no text bar (▮) needed on top of it.
+    txt = _pango(COLOR_LABEL, "z.ai ") + _pango(color, f"{pct:.0f}%")
     parts.append(f"<txt>{txt}</txt>")
     parts.append(f"<bar>{_clamp_bar(pct)}</bar>")
+    # Click → desktop notification with full details.
+    # (genmon 4.3 has no <tooltip> support, so hover can't show numbers.)
+    parts.append(f"<click>{_notify_click_command()}</click>")
 
     # Rich tooltip. Everything is monospace so NBSP padding lines up.
     NL = chr(10)
@@ -485,6 +480,87 @@ def format_json(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> s
 
 
 # --------------------------------------------------------------------------- #
+# Notification (for genmon <click>; genmon 4.3 has no <tooltip>)
+# --------------------------------------------------------------------------- #
+def _self_path() -> str:
+    return os.path.abspath(__file__)
+
+
+def _notify_click_command() -> str:
+    """Command genmon runs on click → fires a desktop notification."""
+    return f"/usr/bin/python3 {_self_path()} --notify"
+
+
+def format_notify(snap: Optional[LimitSnapshot], now: Optional[float] = None):
+    """Return (title, body) for notify-send."""
+    now = now or time.time()
+    if not snap or not snap.dominant:
+        return (
+            "z.ai limits",
+            "No Codex rollout data found.\nStart a Codex session, then click again.",
+        )
+
+    dom = snap.dominant
+    title = f"z.ai · {dom.label} {dom.used_percent:.0f}% used"
+
+    def line(name: str, w: Optional[Window]) -> str:
+        if not w:
+            return f"{name:<8} n/a"
+        return (
+            f"{name:<8} {w.used_percent:>5.1f}%  "
+            f"resets in {_human_remaining(w.resets_at, now)}  "
+            f"({_fmt_ts(w.resets_at)})"
+        )
+
+    weekly = snap.primary if snap.primary and snap.primary.is_weekly else (
+        snap.secondary if snap.secondary and snap.secondary.is_weekly else None
+    )
+    five_h = snap.primary if snap.primary and snap.primary.is_five_hour else (
+        snap.secondary if snap.secondary and snap.secondary.is_five_hour else None
+    )
+    body = [line("weekly", weekly), line("5h", five_h)]
+    for w in (snap.primary, snap.secondary):
+        if w and not w.is_weekly and not w.is_five_hour:
+            body.append(line(w.label, w))
+
+    if snap.credits:
+        body.append("")
+        if snap.credits.unlimited:
+            cred = "unlimited"
+        else:
+            cred = f"balance {_fmt_balance(snap.credits.balance)}"
+        body.append(f"credits  {cred}")
+
+    body.append("")
+    body.append(f"updated {_human_age(snap.ts, now)}")
+    body.append(f"source: {snap.source}")
+    return title, "\n".join(body)
+
+
+def show_notify(snap: Optional[LimitSnapshot]) -> int:
+    """Fire a libnotify notification. Returns notify-send exit code (0=ok)."""
+    import subprocess
+
+    title, body = format_notify(snap)
+    try:
+        return subprocess.call(
+            [
+                "notify-send",
+                "-a", "zai-limits",
+                "-i", "org.xfce.genmon",
+                "-u", "low",
+                title,
+                body,
+            ]
+        )
+    except FileNotFoundError:
+        sys.stderr.write("notify-send not found; install libnotify.\n")
+        print(title)
+        print(body)
+        return 127
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 def build_parser() -> argparse.ArgumentParser:
@@ -503,6 +579,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CODEX_DIR,
         help=f"codex sessions dir (default: {DEFAULT_CODEX_DIR})",
     )
+    p.add_argument(
+        "--notify",
+        action="store_true",
+        help="send a desktop notification with full details (for genmon <click>)",
+    )
     return p
 
 
@@ -510,6 +591,9 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
     snap = collect_codex(args.codex_dir)
+
+    if args.notify:
+        return show_notify(snap)
 
     if args.format == "json":
         print(format_json(snap))

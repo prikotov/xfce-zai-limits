@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=z.ai limits tray
+GenericName=z.ai usage limits indicator
+Comment=Show z.ai (Codex) usage limits as a tray icon with a hover tooltip
+Exec=/usr/bin/python3 /home/dp/MyProjects/xfce-zai-limits/zai_tray.py
+TryExec=/usr/bin/python3
+Icon=org.xfce.genmon
+Terminal=false
+Categories=System;Monitor;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true
+X-XFCE-Autostart-Override=true

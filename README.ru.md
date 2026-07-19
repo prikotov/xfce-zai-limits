@@ -1,87 +1,94 @@
 # xfce-zai-limits (рус.)
 
-Виджет для панели **XFCE**, показывающий **лимиты z.ai** — скользящие окна
-5 часов / неделя, которые сообщает [Codex CLI][codex], когда работает через
-[z.ai][zai]. Прогресс-бар на панели + подробная всплывашка при наведении.
+Индикатор для панели **XFCE**, показывающий **лимиты z.ai** — скользящие окна
+5 часов / неделя, которые сообщает [Codex CLI][codex], работая через [z.ai][zai].
 
-```
-z.ai  75%  ▮▮▮▮▯     ← на панели
-```
+**Рекомендуемый способ — индикатор в системном трее** (`zai_tray.py`):
+- компактная **иконка-прогрессбар** в трее панели (без текста на панели),
+- **tooltip при наведении с полными цифрами** — weekly %, 5ч %, «resets in»,
+  баланс credits, возраст снимка,
+- **клик** → уведомление с теми же деталями,
+- **правый клик** → меню (Обновить / Выйти),
+- цвет зелёный → оранжевый → красный по мере приближения к лимиту.
 
-При наведении:
-
-```
-z.ai limits
-
-weekly:  75%   resets in 5d 22h  (25 июл)
-5h:      42%   resets in 3h 9m   (19 июл)
-
-credits: balance 12.50
-
-updated 3m ago
-read from Codex logs — refreshes as you use
-```
+Также есть режим для `xfce4-genmon-plugin` (`zai_limits.py --format genmon`),
+но **genmon не умеет показывать цифры в tooltip** (его tooltip всегда = строка
+command, см. [docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md)). Если
+нужны цифры при наведении — используй трей-индикатор.
 
 ## Почему так
 
 Codex и так получает снимок `rate_limits` от z.ai на каждом запросе и
 **записывает его в свои rollout-логи**
-(`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`). Виджет просто находит самый
+(`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`). Инструмент находит самый
 свежий снимок и рисует его. **Без API-запроса, без траты квоты, без ключа.**
 
 Цена: число обновляется только когда Codex реально делает запрос — но именно
-тогда лимит и меняется. Всплывашка всегда показывает возраст снимка.
+тогда лимит и меняется. Tooltip всегда показывает возраст снимка.
 
-## Установка и настройка
+## Требования
 
-Нужен `xfce4-genmon-plugin` ≥ 4.18 и Python 3.8+ (только стандартная
-библиотека).
+- Python 3.8+ (для трей-иконки ещё `pygobject` + `cairo` — уже стоят на любом
+  XFCE).
+- Панель XFCE с плагином **Status Tray** (в `xfce4-panel` по умолчанию).
+- Codex CLI, настроенный на z.ai.
 
-```bash
-# Fedora
-sudo dnf install xfce4-genmon-plugin
-# Debian/Ubuntu
-sudo apt install xfce4-genmon-plugin
-```
+Fedora: `sudo dnf install python3-gobject python3-cairo`.
+
+## Быстрый старт — трей-индикатор
 
 ```bash
 git clone https://github.com/<you>/xfce-zai-limits.git ~/src/xfce-zai-limits
-~/src/xfce-zai-limits/bin/zai-limits-genmon.sh   # проверка: печатает XML genmon
+python3 ~/src/xfce-zai-limits/zai_tray.py &
 ```
 
-На панель: правый клик по панели → **Add new items…** → **Generic Monitor** →
-**Add**. В свойствах:
+В трее появится иконка. Наведи → увидишь лимиты.
 
-- **Command** — вызывай **`python3` напрямую** (НЕ через `bin/*.sh`):
-  ```
-  /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon
-  ```
-  Почему не shell-обёртка: `xfce4-genmon-plugin` запускает command в
-  ограниченном окружении, где bash-скрипт с `$(...)` command substitution
-  зависает навсегда (подтверждено `strace`). Прямой `exec` на абсолютный
-  `python3` с абсолютным путём к скрипту — работает. См.
-  [docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md).
-- **Period (s)**: `30`
-- **Label**: пусто
-- галка **Use a progress bar** — по желанию
+### Автозапуск при входе
 
-## Настройка порогов и цветов
+```bash
+cp ~/src/xfce-zai-limits/examples/zai-tray.autostart.desktop \
+   ~/.config/autostart/zai-tray.desktop
+# если клонировал в другое место — поправь путь в Exec=
+```
 
-Через переменные окружения (см. [README.md](README.md#customize) — полная
-таблица). Основные:
+### Настройка
+
+Переменные окружения:
 
 | Переменная | По умолчанию | Что |
 | --- | --- | --- |
+| `ZAI_TRAY_REFRESH` | `30` | интервал обновления, секунды |
+| `ZAI_TRAY_ICON_SIZE` | `24` | базовый размер иконки (подстраивается под трей) |
 | `ZAI_LIMITS_WARN` | `70` | %, после которого бар оранжевый |
 | `ZAI_LIMITS_CRIT` | `90` | %, после которого бар красный |
 
+## CLI
+
+```bash
+python3 zai_limits.py --format text   # человекочитаемо, разово
+python3 zai_limits.py --format json   # для waybar/polybar/i3blocks
+python3 zai_limits.py --format genmon # для xfce4-genmon-plugin (без цифр в tooltip)
+python3 zai_limits.py --notify        # выкинуть уведомление
+```
+
 ## Что покрывается, а что нет
 
-- ✅ **Лимиты Codex / z.ai (rolling 5ч/неделя, модели gpt-5.x через ChatGPT-логин)**
-  — это то, чего чаще всего не хватает. Покрыто полностью.
-- ⚠️ **GLM-модели через API-ключ z.ai (например `pi` на `glm-5.2`)**: `pi` сейчас
-  не логирует лимиты, а у z.ai для GLM другая модель квот (API-кредиты).
-  Запланирован сборщик `--source zai-api`, см. [docs/zai-api.md](docs/zai-api.md).
+- ✅ **Лимиты Codex / z.ai (rolling 5ч/неделя, модели gpt-5.x)** — покрыто
+  полностью. Это то, чего чаще всего не хватает.
+- ⚠️ **GLM-модели через API-ключ z.ai (`pi` на `glm-5.2`)**: `pi` не логирует
+  лимиты, у z.ai для GLM другая модель квот (API-кредиты). Запланирован сборщик
+  `--source zai-api`, см. [docs/zai-api.md](docs/zai-api.md).
+
+## Файлы
+
+```
+zai_tray.py                # трей-индикатор (рекомендуется) — StatusIcon + cairo
+zai_limits.py              # сбор данных + форматтеры genmon/text/json/notify
+bin/zai-limits-genmon.sh   # опциональная обёртка для genmon (с оговорками)
+examples/zai-tray.autostart.desktop   # скопировать в ~/.config/autostart/
+docs/                      # заметки исследования
+```
 
 ## Лицензия
 

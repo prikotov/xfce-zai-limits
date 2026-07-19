@@ -84,12 +84,21 @@ cd ~/src/xfce-zai-limits
 
 1. Right-click the XFCE panel → **Add new items…** → **Generic Monitor** → **Add**.
 2. Right-click the new item → **Properties**.
-3. **Command**: `/home/<you>/src/xfce-zai-limits/bin/zai-limits-genmon.sh`
+3. **Command** — call **`python3` directly** (do **not** point this at the
+   `bin/*.sh` wrapper):
+   ```
+   /usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_limits.py --format genmon
+   ```
+   Why not the shell wrapper: `xfce4-genmon-plugin` spawns its command in a
+   restricted environment where a bash script that uses `$(...)` command
+   substitution hangs forever (verified with `strace`). A direct `exec` to an
+   absolute `python3` with an absolute script path has no such problem. See
+   [docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md).
 4. **Period (s)**: `30` (limits don't change faster; log reads are cheap).
 5. **Label**: leave empty (the label is already in the output).
 6. Tick **Use a progress bar** if you also want the genmon bar on top of the
    in-text one (both are fine).
-7. Close. You should see `z.ai  NN% ▮▮▮▯` immediately.
+7. Close. You should see `z.ai  NN% ▮▮▮▯` within one period (~30s).
 
 ## Customize
 
@@ -144,7 +153,8 @@ Example JSON:
 
 ```
 zai_limits.py              # the whole thing (stdlib only)
-bin/zai-limits-genmon.sh   # thin wrapper genmon points at
+bin/zai-limits-genmon.sh   # optional shell wrapper — see WARNING above
+                             (prefer pointing genmon straight at python3)
 docs/                      # investigation notes & source research
 ```
 

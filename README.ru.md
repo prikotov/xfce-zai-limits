@@ -52,7 +52,15 @@ git clone https://github.com/<you>/xfce-zai-limits.git ~/src/xfce-zai-limits
 На панель: правый клик по панели → **Add new items…** → **Generic Monitor** →
 **Add**. В свойствах:
 
-- **Command**: `/home/<вы>/src/xfce-zai-limits/bin/zai-limits-genmon.sh`
+- **Command** — вызывай **`python3` напрямую** (НЕ через `bin/*.sh`):
+  ```
+  /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon
+  ```
+  Почему не shell-обёртка: `xfce4-genmon-plugin` запускает command в
+  ограниченном окружении, где bash-скрипт с `$(...)` command substitution
+  зависает навсегда (подтверждено `strace`). Прямой `exec` на абсолютный
+  `python3` с абсолютным путём к скрипту — работает. См.
+  [docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md).
 - **Period (s)**: `30`
 - **Label**: пусто
 - галка **Use a progress bar** — по желанию

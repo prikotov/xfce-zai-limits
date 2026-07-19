@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local secrets / scratch (never commit keys)
+.env
+.env.*
+secrets/
+*.key
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

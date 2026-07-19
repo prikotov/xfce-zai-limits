@@ -431,7 +431,7 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     parts = []
 
     if not snap or not (snap.dominant or snap.zai_tokens):
-        parts.append(f"<img>{render_dual_bar_png(0, 0)}</img>")
+        parts.append("<bar>0</bar>")
         parts.append(f"<click>{_notify_click_command()}</click>")
         parts.append("<tool>z.ai — no data\nStart Codex / configure the z.ai key, then click to retry.</tool>")
         return "\n".join(parts)
@@ -439,9 +439,11 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     codex_pct = snap.dominant.used_percent if snap.dominant else 0.0
     zai_pct = snap.zai_tokens.used_percent if snap.zai_tokens else 0.0
 
-    # Two graphical bars in one PNG (genmon's <bar> only renders one).
-    # Numbers live in <tool>, genmon's real hover-tooltip tag (not <tooltip>).
-    parts.append(f"<img>{render_dual_bar_png(codex_pct, zai_pct)}</img>")
+    # One native genmon <bar>. To show BOTH metrics as bars, add two genmon
+    # items: one with ZAI_BAR_METRIC=codex (default), one with =zai.
+    metric = os.environ.get("ZAI_BAR_METRIC", "codex").strip().lower()
+    bar_pct = zai_pct if metric in ("zai", "z.ai", "glm") else codex_pct
+    parts.append(f"<bar>{_clamp_bar(bar_pct)}</bar>")
     parts.append(f"<click>{_notify_click_command()}</click>")
 
     # Rich tooltip. Everything is monospace so NBSP padding lines up.

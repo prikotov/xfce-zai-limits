@@ -16,6 +16,23 @@ Pulled from `panel-plugin/main.c` of the `xfce4-genmon-plugin-4.3.0` tag
 | `<tool>` | `</tool>` | `+6` | **hover tooltip** (Pango markup) |
 | `<css>` | `</css>` | `+5` | CSS applied to the plugin (style the bar!) |
 
+## xfconf properties (config — NOT output tags)
+
+These live under `/plugins/plugin-<N>/...` on the `xfce4-panel` channel:
+
+| Property | C | Purpose |
+| --- | --- | --- |
+| `/command` | string | the script genmon spawns |
+| `/text` | string | **the on-panel LABEL** (genmon calls it "Title"/`acTitle` internally — `CONF_LABEL_TEXT`) — confusingly NOT `/label` or `/title` |
+| `/use-label` | bool | show the `/text` label at all |
+| `/update-period` | int (ms) | spawn interval (default 30000) — genmon uses this, not `/period` |
+| `/font` | string | label font |
+| `/enable-single-row` | bool | layout |
+
+To set the panel label, write `/text` (and ensure `/use-label=true`). genmon
+listens on xfconf and updates live — no panel restart needed (in fact a
+restart can clobber it if the GUI had cached a different value).
+
 ## The two gotchas everyone hits
 
 1. **The tooltip tag is `<tool>`, not `<tooltip>`.** No `<tooltip>` tag exists.

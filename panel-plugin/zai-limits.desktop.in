@@ -1,9 +1,0 @@
-[Xfce Panel]
-Type=X-XFCE-PanelPlugin
-Encoding=UTF-8
-Name=z.ai limits
-Comment=z.ai (Codex) usage limits — graphical bar + hover details
-Icon=org.xfce.genmon
-X-XFCE-Module=zai-plugin
-X-XFCE-Internal=false
-X-XFCE-API=2.0

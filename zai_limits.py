@@ -320,29 +320,19 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     parts = []
 
     if not snap or not snap.dominant:
-        label = _pango(COLOR_DIM, "z.ai")
-        txt = f"({_pango(COLOR_DIM, 'z.ai')}) {_pango(COLOR_DIM, 'no data')}"
-        parts.append(f"<txt>{txt}</txt>")
         parts.append("<bar>0</bar>")
         parts.append(f"<click>{_notify_click_command()}</click>")
-        tip = "<tt><b>z.ai limits</b></tt>\n" + _pango(
-            COLOR_DIM, "No Codex rollout data found. Click to retry."
-        )
-        parts.append(f"<tooltip>{tip}</tooltip>")
-        parts.append("<icon>org.xfce.genmon</icon>")
+        parts.append("<tool>z.ai — no data\nStart a Codex session, then click to retry.</tool>")
         return "\n".join(parts)
 
     dom = snap.dominant
     pct = dom.used_percent
-    color = _color_for(pct)
 
-    # Compact on-panel label: "z.ai 75%". The graphical <bar> carries the
-    # progress bar; no text bar (▮) needed on top of it.
-    txt = _pango(COLOR_LABEL, "z.ai ") + _pango(color, f"{pct:.0f}%")
-    parts.append(f"<txt>{txt}</txt>")
+    # Panel shows ONLY the graphical <bar> (no <txt> label — per request).
+    # Numbers live in <tool>, which is genmon's REAL hover-tooltip tag.
+    # (Not <tooltip> — that tag does not exist; verified against
+    # xfce4-genmon-plugin 4.3.0 source: it parses <tool>.)
     parts.append(f"<bar>{_clamp_bar(pct)}</bar>")
-    # Click → desktop notification with full details.
-    # (genmon 4.3 has no <tooltip> support, so hover can't show numbers.)
     parts.append(f"<click>{_notify_click_command()}</click>")
 
     # Rich tooltip. Everything is monospace so NBSP padding lines up.
@@ -398,8 +388,7 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
         tip.append(_pango(COLOR_DIM, f"source: {snap.source}"))
     tip.append(_pango(COLOR_DIM, "read from Codex logs — refreshes as you use Codex"))
 
-    parts.append(f"<tooltip>{NL.join(tip)}</tooltip>")
-    parts.append("<icon>org.xfce.genmon</icon>")
+    parts.append(f"<tool>{NL.join(tip)}</tool>")
     return "\n".join(parts)
 
 

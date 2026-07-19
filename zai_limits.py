@@ -41,6 +41,8 @@ import math
 import os
 import sys
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
@@ -126,6 +128,12 @@ class LimitSnapshot:
     credits: Optional[Credits] = None
     limit_id: Optional[str] = None
     plan_type: Optional[str] = None
+    # z.ai account usage (GLM / pi plan) — a SEPARATE provider from codex.
+    # codex talks to OpenAI/ChatGPT; this is the z.ai/GLM subscription quota.
+    zai_tokens: Optional[Window] = None
+    zai_time: Optional[Window] = None
+    zai_level: Optional[str] = None
+    zai_ts: Optional[float] = None
 
     @property
     def dominant(self) -> Optional[Window]:
@@ -239,6 +247,107 @@ def _window_from_raw(raw) -> Optional[Window]:
 
 
 # --------------------------------------------------------------------------- #
+# z.ai account usage (GLM / pi plan) — separate provider from codex
+# --------------------------------------------------------------------------- #
+ZAI_USAGE_URL = "https://api.z.ai/api/monitor/usage/quota/limit"
+ZAI_CACHE_PATH = os.environ.get("ZAI_CACHE", "/tmp/zai-usage-cache.json")
+ZAI_CACHE_TTL = int(os.environ.get("ZAI_CACHE_TTL", "25"))
+
+
+def _read_zai_key() -> Optional[str]:
+    """Read the z.ai API key from env or ~/.pi/agent/auth.json."""
+    k = os.environ.get("ZAI_API_KEY")
+    if k:
+        return k
+    for path in ("~/.pi/agent/auth.json", "~/.config/pi/agent/auth.json"):
+        try:
+            with open(os.path.expanduser(path)) as f:
+                return (json.load(f).get("zai") or {}).get("key")
+        except (OSError, json.JSONDecodeError):
+            continue
+    return None
+
+
+def collect_zai() -> Optional[dict]:
+    """Query the z.ai subscription usage API (with a short on-disk cache).
+
+    Endpoint discovered via the shaftoe/pi-zai-usage extension:
+    GET https://api.z.ai/api/monitor/usage/quota/limit  with the zai API key.
+    Returns::
+
+        {"data": {"limits": [{"type":"TOKENS_LIMIT","percentage":22,
+                              "nextResetTime":1784480862439},
+                             {"type":"TIME_LIMIT","percentage":0,...}],
+                  "level":"pro"}, "success": true}
+    """
+    # serve from cache if fresh (genmon ticks every 30s; z.ai needn't be hit
+    # that often). Cache stores JSON primitives; Windows are rebuilt on return.
+    try:
+        with open(ZAI_CACHE_PATH) as f:
+            cached = json.load(f)
+        if time.time() - float(cached.get("ts", 0)) < ZAI_CACHE_TTL:
+            return _build_zai_result(cached)
+    except (OSError, ValueError, TypeError):
+        pass
+
+    key = _read_zai_key()
+    if not key:
+        return None
+    req = urllib.request.Request(
+        ZAI_USAGE_URL,
+        headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            payload = json.load(r)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    if not payload.get("success"):
+        return None
+    data = payload.get("data") or {}
+    limits = data.get("limits") or []
+    tokens = next((l for l in limits if l.get("type") == "TOKENS_LIMIT"), None)
+    time_l = next((l for l in limits if l.get("type") == "TIME_LIMIT"), None)
+
+    def prim(lim):
+        return {
+            "pct": float(lim.get("percentage", 0) or 0) if lim else None,
+            "reset": (int(lim.get("nextResetTime", 0)) // 1000) if lim and lim.get("nextResetTime") else 0,
+        }
+
+    cached = {
+        "tokens": prim(tokens),
+        "time": prim(time_l),
+        "level": data.get("level"),
+        "ts": time.time(),
+    }
+    try:
+        with open(ZAI_CACHE_PATH, "w") as f:
+            json.dump(cached, f)
+    except OSError:
+        pass
+    return _build_zai_result(cached)
+
+
+def _build_zai_result(cached: dict) -> Optional[dict]:
+    def mk(lim: dict, weekly: bool) -> Optional[Window]:
+        if not lim or lim.get("pct") is None:
+            return None
+        return Window(
+            used_percent=float(lim["pct"]),
+            window_minutes=10080 if weekly else 300,
+            resets_at=int(lim.get("reset", 0) or 0),
+        )
+
+    return {
+        "tokens": mk(cached.get("tokens"), weekly=True),
+        "time": mk(cached.get("time"), weekly=False),
+        "level": cached.get("level"),
+        "ts": float(cached.get("ts", 0) or 0),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Formatting helpers
 # --------------------------------------------------------------------------- #
 def _color_for(pct: float) -> str:
@@ -319,13 +428,13 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     now = now or time.time()
     parts = []
 
-    if not snap or not snap.dominant:
+    if not snap or not (snap.dominant or snap.zai_tokens):
         parts.append("<bar>0</bar>")
         parts.append(f"<click>{_notify_click_command()}</click>")
-        parts.append("<tool>z.ai — no data\nStart a Codex session, then click to retry.</tool>")
+        parts.append("<tool>z.ai — no data\nStart Codex / configure the z.ai key, then click to retry.</tool>")
         return "\n".join(parts)
 
-    dom = snap.dominant
+    dom = snap.dominant or snap.zai_tokens
     pct = dom.used_percent
 
     # Panel shows ONLY the graphical <bar> (no <txt> label — per request).
@@ -337,7 +446,8 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
 
     # Rich tooltip. Everything is monospace so NBSP padding lines up.
     NL = chr(10)
-    tip: list[str] = ["<tt><b>z.ai limits</b></tt>", ""]
+    tip: list[str] = ["<tt><b>z.ai · limits</b></tt>", ""]
+    tip.append(_pango(COLOR_LABEL, "codex (ChatGPT):"))
 
     def window_line(name: str, w: Optional[Window]) -> str:
         name_part = _pad_right(f"{name}:", 8)
@@ -381,6 +491,17 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
             cred = _pango(COLOR_DIM, f"balance {_fmt_balance(snap.credits.balance)}")
         tip.append(_pango(COLOR_LABEL, _pad_right("credits:", 8)) + NBSP + cred)
 
+    # z.ai (GLM) subscription usage — separate provider, live API.
+    if snap.zai_tokens or snap.zai_time:
+        tip.append("")
+        label = "z.ai (GLM"
+        if snap.zai_level:
+            label += f", {snap.zai_level}"
+        label += "):"
+        tip.append(_pango(COLOR_LABEL, label))
+        tip.append(window_line("weekly", snap.zai_tokens))
+        tip.append(window_line("5h", snap.zai_time))
+
     # Provenance — important: data is read from a log, not live.
     tip.append("")
     tip.append(_pango(COLOR_DIM, f"updated {_human_age(snap.ts, now)}"))
@@ -408,17 +529,20 @@ def _clamp_bar(pct: float) -> int:
 
 def format_text(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> str:
     now = now or time.time()
-    if not snap or not snap.dominant:
-        return "z.ai: no data (start a Codex session)"
-    dom = snap.dominant
-    lines = [f"z.ai  dominant {dom.label}: {dom.used_percent:.0f}% used"]
-    for name, w in (("weekly", snap.primary), ("5h", snap.secondary)):
-        if w:
-            lines.append(
-                f"  {name:<7} {w.used_percent:>5.1f}%  "
-                f"resets in {_human_remaining(w.resets_at, now)}  "
-                f"({_fmt_ts(w.resets_at)})"
-            )
+    if not snap or not (snap.dominant or snap.zai_tokens):
+        return "z.ai: no data (start Codex / configure z.ai key)"
+    lines = []
+    # codex (ChatGPT)
+    if snap.dominant:
+        dom = snap.dominant
+        lines.append(f"codex (ChatGPT)  {dom.label}: {dom.used_percent:.0f}% used")
+        for name, w in (("weekly", snap.primary), ("5h", snap.secondary)):
+            if w:
+                lines.append(
+                    f"  {name:<7} {w.used_percent:>5.1f}%  "
+                    f"resets in {_human_remaining(w.resets_at, now)}  "
+                    f"({_fmt_ts(w.resets_at)})"
+                )
     if snap.credits:
         lines.append(
             f"  credits balance: {_fmt_balance(snap.credits.balance)}"
@@ -426,6 +550,20 @@ def format_text(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> s
         )
     lines.append(f"  updated {_human_age(snap.ts, now)}")
     lines.append(f"  source: {snap.source}")
+    # z.ai (GLM)
+    if snap.zai_tokens or snap.zai_time:
+        lines.append("")
+        level = f", {snap.zai_level}" if snap.zai_level else ""
+        lines.append(f"z.ai (GLM{level})")
+        for name, w in (("weekly", snap.zai_tokens), ("5h", snap.zai_time)):
+            if w:
+                lines.append(
+                    f"  {name:<7} {w.used_percent:>5.1f}%  "
+                    f"resets in {_human_remaining(w.resets_at, now)}  "
+                    f"({_fmt_ts(w.resets_at)})"
+                )
+        if snap.zai_ts:
+            lines.append(f"  updated {_human_age(snap.zai_ts, now)} (live API)")
     return "\n".join(lines)
 
 
@@ -569,6 +707,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"codex sessions dir (default: {DEFAULT_CODEX_DIR})",
     )
     p.add_argument(
+        "--skip-zai",
+        action="store_true",
+        help="do not query the z.ai (GLM) account usage API",
+    )
+    p.add_argument(
         "--notify",
         action="store_true",
         help="send a desktop notification with full details (for genmon <click>)",
@@ -580,6 +723,17 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
     snap = collect_codex(args.codex_dir)
+
+    # z.ai (GLM) subscription usage — separate provider, live API.
+    if not args.skip_zai:
+        zai = collect_zai()
+        if zai:
+            if snap is None:
+                snap = LimitSnapshot(source="zai", ts=zai["ts"])
+            snap.zai_tokens = zai["tokens"]
+            snap.zai_time = zai["time"]
+            snap.zai_level = zai["level"]
+            snap.zai_ts = zai["ts"]
 
     if args.notify:
         return show_notify(snap)

@@ -30,8 +30,15 @@ These live under `/plugins/plugin-<N>/...` on the `xfce4-panel` channel:
 | `/enable-single-row` | bool | layout |
 
 To set the panel label, write `/text` (and ensure `/use-label=true`). genmon
-listens on xfconf and updates live — no panel restart needed (in fact a
-restart can clobber it if the GUI had cached a different value).
+reads `/text` only at **init** (and on its GUI Apply) — it has **no xfconf
+property-changed handler**. Worse: genmon is hooked to the panel's `"save"`
+signal (`g_signal_connect(plugin, "save", genmon_write_config)`), so on
+quit/restart it writes its in-memory `acTitle` back to `/text`, clobbering an
+`xfconf-query` set you did while it was running.
+
+**Recipe that actually sticks:** `xfce4-panel -q` → `xfconf-query … /text -s …`
+→ start the panel. With the panel down there's no genmon to overwrite it, and
+the fresh genmon init reads your value.
 
 ## The two gotchas everyone hits
 

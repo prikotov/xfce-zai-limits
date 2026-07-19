@@ -3,31 +3,25 @@
 An **XFCE panel indicator for z.ai usage limits** — the rolling 5-hour / weekly
 caps that [OpenAI Codex CLI][codex] reports when pointed at [z.ai][zai].
 
-**Recommended: the system-tray indicator** (`zai_tray.py`). It gives you:
+The recommended mode is **`zai_indicator.py`** (AppIndicator3). You put
+`xfce4-statusnotifier-plugin` on whichever panel you like (e.g. your left
+monitoring dock, next to cpugraph/systemload), and the indicator lands there
+with:
 
-- a compact **graphical progress-bar icon** in the panel's system tray (no text
-  cluttering the panel),
+- a compact **graphical progress-bar icon** (no text cluttering the panel),
 - a **hover tooltip with the full breakdown** — weekly %, 5-hour %, resets-in,
   credits balance, snapshot age,
-- **left-click → desktop notification** with the same details,
-- **right-click → menu** (Refresh / Quit),
+- a **click menu** (Refresh / Send notification / Quit),
 - color shifts green → orange → red as you approach the cap.
 
 ```
- tray icon:       hover tooltip:
- ┌─────┐          z.ai · weekly 75% used
- │ ▬▬▬ │          ────────────────────────────
- └─────┘          weekly   75.0%  resets in 5d 21h (Jul 25)
-                 5h        n/a
-                 credits   balance 0
-                 updated 1h ago · click for details
+ panel:       hover tooltip:
+ ┌─────┐      z.ai · 75% used (weekly)
+ │ ▬▬▬ │      weekly 75% · resets in 5d 21h
+ └─────┘
+             credits: balance 0
+             updated 1h ago
 ```
-
-There is also a `xfce4-genmon-plugin` mode (`zai_limits.py --format genmon`),
-but **genmon can't show numbers in the hover tooltip** (its tooltip is always
-the command string — see [docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md)).
-Use the tray indicator if you want numbers on hover; genmon is kept as a
-fallback for panels without a system tray.
 
 ## How it works (zero quota cost)
 
@@ -57,31 +51,42 @@ anyway. The tooltip always shows the snapshot age so you know how live it is.
 
 ## Requirements
 
-- Python 3.8+ (standard library only for data; the tray icon also needs
-  `pygobject` + `cairo` — both pre-installed on any XFCE system).
-- An XFCE panel with the **Status Tray** plugin (the default `xfce4-panel`
-  ships one; it renders both legacy `Gtk.StatusIcon`s and appindicators).
+- Python 3.8+ with `pygobject` + `cairo` (pre-installed on any XFCE system).
+- **`xfce4-statusnotifier-plugin`** on the panel where you want the indicator.
+  Fedora: `sudo dnf install xfce4-statusnotifier-plugin`.
 - OpenAI Codex CLI configured against z.ai (the thing producing the logs).
 
-On Fedora: `sudo dnf install python3-gobject python3-cairo`.
-
-## Quick start — tray indicator
+## Quick start
 
 ```bash
 git clone https://github.com/<you>/xfce-zai-limits.git ~/src/xfce-zai-limits
-# run it now
-python3 ~/src/xfce-zai-limits/zai_tray.py &
+python3 ~/src/xfce-zai-limits/zai_indicator.py &
 ```
 
-An icon should appear in your panel's system tray. Hover it → see the limits.
+If your panel doesn't already have a "StatusNotifier" item, add one: panel →
+**Add new items…** → **StatusNotifier**. The icon appears there. Hover it → see
+the limits.
 
-### Autostart on login
+### Autostart on login (systemd user unit)
 
 ```bash
-cp ~/src/xfce-zai-limits/examples/zai-tray.autostart.desktop \
-   ~/.config/autostart/zai-tray.desktop
-# edit the Exec= path inside if you cloned elsewhere
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/zai-indicator.service <<'EOF'
+[Unit]
+Description=z.ai limits panel indicator
+After=graphical-session.target
+[Service]
+ExecStart=/usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_indicator.py
+Restart=on-failure
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now zai-indicator.service
 ```
+
+(There's also `examples/zai-tray.autostart.desktop` for the classic XDG
+autostart path — point `Exec=` at `zai_indicator.py`.)
 
 ### Configure
 
@@ -90,7 +95,6 @@ Environment variables:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ZAI_TRAY_REFRESH` | `30` | refresh interval, seconds |
-| `ZAI_TRAY_ICON_SIZE` | `24` | base icon size (auto-adjusts to the tray) |
 | `ZAI_LIMITS_WARN` | `70` | `% used` at which the bar turns orange |
 | `ZAI_LIMITS_CRIT` | `90` | `% used` at which the bar turns red |
 
@@ -99,24 +103,22 @@ Environment variables:
 ```bash
 python3 zai_limits.py --format text   # human-readable one-shot
 python3 zai_limits.py --format json   # structured (for Waybar/polybar/i3blocks)
-python3 zai_limits.py --format genmon # for xfce4-genmon-plugin (no tooltip numbers)
 python3 zai_limits.py --notify        # fire a desktop notification
 ```
 
-## Alternative: xfce4-genmon-plugin
+## Alternative modes
 
-If you'd rather have a panel item than a tray icon, `zai_limits.py --format
-genmon` emits genmon markup. **Caveat: genmon's tooltip is always the command
-string** (it has no `<tooltip>` tag), so you can't see the numbers on hover —
-only the compact `z.ai NN%` label, the graphical `<bar>`, and a click-to-notify
-popup. See [docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md) for the
-gotchas (in particular: point genmon straight at `python3`, **not** at the
-shell wrapper — `$(...)` hangs in genmon's spawn environment).
+- **`zai_tray.py`** — legacy `Gtk.StatusIcon`. Goes into the old XEmbed
+  systray plugin (so it lands wherever that plugin is, often the bottom bar).
+  Useful if you can't add StatusNotifier where you want. Same tooltip+menu.
+- **`zai_limits.py --format genmon`** — for `xfce4-genmon-plugin`. Caveat:
+  genmon has **no `<tooltip>` tag**, so hover always shows the command string;
+  it can only show a compact `z.ai NN%` label + graphical `<bar>` + a
+  click-to-notify popup. See [docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md).
 
 ## Limitations & roadmap
 
 - **Codex / z.ai rolling limits (gpt-5.x via ChatGPT login): fully covered.**
-  These are the limits you most often run out of.
 - **GLM models via z.ai API key (e.g. `pi` using `glm-5.2`)**: `pi` does not
   log rate-limit info today, and z.ai exposes GLM usage through a different
   mechanism (API credits / dashboard). A `--source zai-api` collector that
@@ -126,10 +128,10 @@ shell wrapper — `$(...)` hangs in genmon's spawn environment).
 ## Files
 
 ```
-zai_tray.py                # the tray indicator (recommended) — StatusIcon + cairo icon
-zai_limits.py              # data collection + genmon/text/json/notify formatters
-bin/zai-limits-genmon.sh   # optional genmon wrapper (see WARNING in genmon-spawn-notes.md)
-examples/zai-tray.autostart.desktop   # copy to ~/.config/autostart/
+zai_indicator.py           # PRIMARY — AppIndicator3 (statusnotifier panel plugin)
+zai_tray.py                # ALTERNATIVE — Gtk.StatusIcon (legacy systray)
+zai_limits.py              # data collection + text/json/genmon/notify formatters
+bin/zai-limits-genmon.sh   # optional genmon wrapper (see docs/genmon-spawn-notes.md)
 docs/                      # investigation notes & source research
 ```
 

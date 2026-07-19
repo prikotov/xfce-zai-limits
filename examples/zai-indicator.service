@@ -1,0 +1,14 @@
+[Unit]
+Description=z.ai limits panel indicator (AppIndicator3)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+# Point this at your clone of the repo:
+ExecStart=/usr/bin/python3 /home/%i/src/xfce-zai-limits/zai_indicator.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

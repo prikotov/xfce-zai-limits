@@ -44,6 +44,8 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+
+import cairo
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -429,19 +431,17 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     parts = []
 
     if not snap or not (snap.dominant or snap.zai_tokens):
-        parts.append("<bar>0</bar>")
+        parts.append(f"<img>{render_dual_bar_png(0, 0)}</img>")
         parts.append(f"<click>{_notify_click_command()}</click>")
         parts.append("<tool>z.ai — no data\nStart Codex / configure the z.ai key, then click to retry.</tool>")
         return "\n".join(parts)
 
-    dom = snap.dominant or snap.zai_tokens
-    pct = dom.used_percent
+    codex_pct = snap.dominant.used_percent if snap.dominant else 0.0
+    zai_pct = snap.zai_tokens.used_percent if snap.zai_tokens else 0.0
 
-    # Panel shows ONLY the graphical <bar> (no <txt> label — per request).
-    # Numbers live in <tool>, which is genmon's REAL hover-tooltip tag.
-    # (Not <tooltip> — that tag does not exist; verified against
-    # xfce4-genmon-plugin 4.3.0 source: it parses <tool>.)
-    parts.append(f"<bar>{_clamp_bar(pct)}</bar>")
+    # Two graphical bars in one PNG (genmon's <bar> only renders one).
+    # Numbers live in <tool>, genmon's real hover-tooltip tag (not <tooltip>).
+    parts.append(f"<img>{render_dual_bar_png(codex_pct, zai_pct)}</img>")
     parts.append(f"<click>{_notify_click_command()}</click>")
 
     # Rich tooltip. Everything is monospace so NBSP padding lines up.
@@ -524,7 +524,61 @@ def _fmt_balance(b: float) -> str:
 
 
 def _clamp_bar(pct: float) -> int:
-    return int(max(0, min(100, round(pct))))
+    return int(max(0, min(100, round(pct))));
+
+
+# --------------------------------------------------------------------------- #
+# Dual-bar PNG rendering for genmon <img> (two bars: codex + z.ai)
+# --------------------------------------------------------------------------- #
+_DUAL_BAR_PATH = os.environ.get("ZAI_BARS_PNG", "/tmp/zai-bars.png")
+
+
+def _hex_to_rgb(hexcolor: str) -> tuple[float, float, float]:
+    h = hexcolor.lstrip("#")
+    return tuple(int(h[i : i + 2], 16) / 255.0 for i in (0, 2, 4))  # type: ignore
+
+
+def _round_rect(ctx, x, y, w, h, r):
+    r = min(r, w / 2, h / 2)
+    ctx.new_sub_path()
+    ctx.arc(x + w - r, y + r, r, -3.14159 / 2, 0)
+    ctx.arc(x + w - r, y + h - r, r, 0, 3.14159 / 2)
+    ctx.arc(x + r, y + h - r, r, 3.14159 / 2, 3.14159)
+    ctx.arc(x + r, y + r, r, 3.14159, 3 * 3.14159 / 2)
+    ctx.close_path()
+
+
+def _draw_h_bar(ctx, x, y, w, h, pct: float):
+    # track
+    ctx.set_source_rgba(0.235, 0.235, 0.235, 1.0)
+    _round_rect(ctx, x, y, w, h, h / 2)
+    ctx.fill()
+    # fill
+    if pct > 0:
+        fw = max(h, w * (max(0.0, min(100.0, pct)) / 100.0))
+        ctx.set_source_rgba(*_hex_to_rgb(_color_for(pct)), 1.0)
+        _round_rect(ctx, x, y, fw, h, h / 2)
+        ctx.fill()
+
+
+def render_dual_bar_png(
+    codex_pct: float,
+    zai_pct: float,
+    width: int = 20,
+    height: int = 40,
+    path: str = _DUAL_BAR_PATH,
+) -> str:
+    """Render a tall PNG with two stacked horizontal bars (codex on top,
+    z.ai on bottom). For genmon's <img> tag — genmon's <bar> only does one."""
+    surf = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
+    ctx = cairo.Context(surf)
+    gap = 3
+    bar_h = (height - gap) // 2
+    _draw_h_bar(ctx, 1, 0, width - 2, bar_h, codex_pct)
+    _draw_h_bar(ctx, 1, bar_h + gap, width - 2, height - bar_h - gap, zai_pct)
+    surf.flush()
+    surf.write_to_png(path)
+    return path
 
 
 def format_text(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> str:

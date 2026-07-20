@@ -488,7 +488,7 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
         tip.append(window_line("5h", snap.zai_tokens))     # TOKENS_LIMIT = 5h rolling
         tip.append(window_line("weekly", snap.zai_time))   # TIME_LIMIT = weekly tools quota
         tip.append("")
-        tip.append(_pango(COLOR_DIM, "live API · click for details"))
+        tip.append(_pango(COLOR_DIM, f"live API · updated {_human_age(snap.zai_ts or snap.ts, now)}"))
     else:
         tip.append("<tt><b>codex (ChatGPT)</b></tt>")
         tip.append("")

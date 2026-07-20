@@ -35,22 +35,47 @@ Codex и так получает снимок `rate_limits` от z.ai на ка�
 ## Требования
 
 - `xfce4-genmon-plugin` (Fedora: `sudo dnf install xfce4-genmon-plugin`)
-- Python 3.8+ (только стандартная библиотека)
-- Codex CLI, настроенный на z.ai
+- Python 3.8+ (только стандартная библиотека; `pygobject`/`cairo` для genmon не нужны)
+- OpenAI Codex CLI — для метрики **codex** (читает rollout-логи)
+- z.ai API-ключ — для метрики **z.ai / GLM**: pi `~/.pi/agent/auth.json`
+  (`zai.key`) или `$ZAI_API_KEY`. Без него работает только bar codex.
 
-## Установка
+## Установка — два бара (codex + z.ai)
 
-1. Добавь на нужную панель **Generic Monitor** (панель → Add new items… →
-   Generic Monitor).
-2. В свойствах **Command** — вызывай `python3` **напрямую** (НЕ через
-   `bin/zai-limits-genmon.sh` — bash-wrapper с `$(...)` зависает в окружении
-   genmon, см. [docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md)):
+У genmon `<bar>` только один бар, поэтому добавь **два Generic Monitor** на
+панель — по одному на метрику:
 
+1. **codex** — Command:
    ```
    /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon
    ```
+2. **z.ai** — Command (обрати внимание на `ZAI_BAR_METRIC=zai`):
+   ```
+   env ZAI_BAR_METRIC=zai /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon
+   ```
 
-3. **Period (s)**: `30`. **Label**: любая (например «LLM»). Готово.
+Period `30` для обоих. Tooltip у каждого — только свой провайдер; `<bar>`
+окрашивается зелёный/оранжевый/красный по порогам автоматически (через тег
+`<css>`).
+
+> **Вызывай `python3` напрямую** — не указывай genmon на `bin/*.sh`;
+> bash-обёртка с `$(...)` зависает в spawn-окружении genmon
+> ([docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md)).
+
+### Подписи (gotcha genmon)
+
+Подпись на панели — это xfconf-свойство **`/text`** (НЕ `/label` и НЕ `/title`),
+и genmon перезаписывает его из памяти при сохранении панели. Ставь при
+выключенной панели, иначе собьётся:
+
+```bash
+xfce4-panel -q
+xfconf-query -c xfce4-panel -p /plugins/plugin-<N>/text -s "codex"
+xfconf-query -c xfce4-panel -p /plugins/plugin-<M>/text -s "z.ai"
+# потом снова запусти xfce4-panel
+```
+
+Полная таблица тегов/свойств: [docs/genmon-tags.md](docs/genmon-tags.md).
 
 ## Цвет бара
 

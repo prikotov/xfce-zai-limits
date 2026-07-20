@@ -486,7 +486,7 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
         tip.append(f"<tt><b>{header}</b></tt>")
         tip.append("")
         tip.append(window_line("5h", snap.zai_tokens))     # TOKENS_LIMIT = 5h rolling
-        tip.append(window_line("weekly", snap.zai_time))   # TIME_LIMIT = weekly tools quota
+        tip.append(window_line("MCP", snap.zai_time))     # TIME_LIMIT = weekly MCP-tools quota (search/web-reader/zread)
         tip.append("")
         tip.append(_pango(COLOR_DIM, f"live API · updated {_human_age(snap.zai_ts or snap.ts, now)}"))
     else:
@@ -615,7 +615,7 @@ def format_text(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> s
         lines.append("")
         level = f", {snap.zai_level}" if snap.zai_level else ""
         lines.append(f"z.ai (GLM{level})")
-        for name, w in (("5h", snap.zai_tokens), ("weekly", snap.zai_time)):
+        for name, w in (("5h", snap.zai_tokens), ("MCP", snap.zai_time)):
             if w:
                 lines.append(
                     f"  {name:<7} {w.used_percent:>5.1f}%  "

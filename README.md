@@ -20,8 +20,6 @@ hover tooltip scoped to that provider. Click → desktop notification.
  ┌───┐ z.ai         credits balance 0         weekly   0% resets in 7d
  └───┘
 ```
-            updated 1h ago
-```
 
 ## How the hover tooltip works (the key insight)
 

@@ -1,23 +1,25 @@
 # xfce-zai-limits
 
-An **XFCE panel widget for z.ai usage limits** — the rolling 5-hour / weekly
-caps that [OpenAI Codex CLI][codex] reports when pointed at [z.ai][zai].
+An **XFCE panel widget** showing usage limits from **two** AI providers, as
+native `xfce4-genmon-plugin` items (like cpugraph/systemload — no systray,
+no SNI, no compiled plugin):
 
-It runs as a native `xfce4-genmon-plugin` item (just like cpugraph/systemload —
-no systray, no SNI, no compiled plugin):
+- **codex** (OpenAI/ChatGPT) — the rolling 5-hour / weekly caps the
+  [OpenAI Codex CLI][codex] hits. Read from Codex rollout logs (zero quota).
+- **z.ai / GLM** (pi) — the 5-hour rolling `TOKENS_LIMIT` and weekly
+  `TIME_LIMIT` from the [z.ai][zai] account API (the "plan usage" you see in
+  the web cabinet).
 
-- a **graphical progress bar** on the panel (no text label by default),
-- a **hover tooltip with the full breakdown** — weekly %, 5-hour %, resets-in,
-  credits balance, snapshot age,
-- **click → desktop notification** with the same details,
-- the bar is green → orange → red as you approach the cap (see CSS note below).
+Each is its own panel bar, colored green → orange → red by threshold, with a
+hover tooltip scoped to that provider. Click → desktop notification.
 
 ```
- panel:     hover tooltip:
- ┌───┐      z.ai · weekly 75% used
- │ ▮ │      weekly  75.0%  resets in 5d 18h (Jul 25)
- └───┘      5h       n/a
-            credits  balance 0
+ panel:            hover (codex):             hover (z.ai):
+ ┌───┐ codex        codex (ChatGPT)            z.ai (GLM, pro)
+ └───┘              weekly 75% resets in 5d    5h      54% resets in 37m
+ ┌───┐ z.ai         credits balance 0         weekly   0% resets in 7d
+ └───┘
+```
             updated 1h ago
 ```
 
@@ -50,29 +52,47 @@ changes); the tooltip always shows the snapshot age.
 ## Requirements
 
 - `xfce4-genmon-plugin` (Fedora: `sudo dnf install xfce4-genmon-plugin`)
-- Python 3.8+ (stdlib only)
-- OpenAI Codex CLI configured against z.ai
+- Python 3.8+ (stdlib only; `pygobject`/`cairo` not needed for genmon mode)
+- OpenAI Codex CLI — for the **codex** metric (reads its rollout logs)
+- z.ai API key — for the **z.ai / GLM** metric: pi's `~/.pi/agent/auth.json`
+  (`zai.key`), or `$ZAI_API_KEY`. Without it, only the codex bar works.
 
-## Setup
+## Setup — two bars (codex + z.ai)
 
-1. Add a **Generic Monitor** item to the panel where you want it
-   (panel → Add new items… → Generic Monitor).
-2. In its Properties, set **Command** to call `python3` **directly**
-   (do **not** point it at `bin/zai-limits-genmon.sh` — a bash wrapper using
-   `$(...)` hangs inside genmon's spawn environment; see
-   [docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md)):
+genmon's `<bar>` renders only one bar, so add **two Generic Monitor** items to
+the panel — one per metric:
 
+1. **codex** item — Command:
    ```
    /usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_limits.py --format genmon
    ```
+2. **z.ai** item — Command (note the `ZAI_BAR_METRIC=zai` env):
+   ```
+   env ZAI_BAR_METRIC=zai /usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_limits.py --format genmon
+   ```
 
-3. **Period (s)**: `30`. Label: whatever you like (e.g. "LLM"). That's it.
+Period `30` for both. Each item's hover tooltip shows only its own provider's
+breakdown; the `<bar>` is colored green/orange/red by threshold automatically
+(via genmon's `<css>` tag).
 
-## Coloring the bar green/orange/red
+> **Call `python3` directly** — do not point genmon at `bin/*.sh`; a bash
+> wrapper using `$(...)` hangs in genmon's spawn environment
+> ([docs/genmon-spawn-notes.md](docs/genmon-spawn-notes.md)).
 
-genmon's `<bar>` uses the GTK theme color by default (blue on Adwaita). To get
-threshold colors, emit a `<css>` tag (also supported by genmon 4.3.0) styling
-the progressbar — see [docs/genmon-tags.md](docs/genmon-tags.md). Optional.
+### Panel labels (genmon gotcha)
+
+genmon's on-panel label is the **`/text`** xfconf property (not `/label` or
+`/title`), and genmon overwrites it from memory on panel-save. Set it while
+the panel is down, else it gets clobbered:
+
+```bash
+xfce4-panel -q
+xfconf-query -c xfce4-panel -p /plugins/plugin-<N>/text -s "codex"
+xfconf-query -c xfce4-panel -p /plugins/plugin-<M>/text -s "z.ai"
+# then start xfce4-panel again
+```
+
+Full tag/property reference: [docs/genmon-tags.md](docs/genmon-tags.md).
 
 ## Customize
 

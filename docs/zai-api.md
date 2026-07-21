@@ -69,6 +69,26 @@ Both limits return `nextResetTime` (unix ms). The widget uses it **directly**
 (no computation) as the reset instant: `resets_at = nextResetTime // 1000`,
 and "resets in Xh" = `resets_at - now`. So the reset time is exact, from z.ai.
 
+## Cash / Credits balance — NOT implemented (intentionally)
+
+z.ai distinguishes "Credits balance" and "Cash balance" (FAQ: «Credits balance
+will be used first. If insufficient, cash balance will be used…»), but **there is
+no public API for them**. Verified by exhaustive search:
+
+- z.ai's own OpenAPI spec (`docs.z.ai/openapi.json`) lists only 14 inference
+  endpoints — no account/billing.
+- ~30 probed paths (`/user/balance`, `/billing`, `/wallet`, `/credits`,
+  `/account/...`) across `api.z.ai`, `chat.z.ai`, `open.bigmodel.cn` — all 404
+  (one, `chat.z.ai/api/v1/users/me`, returns 401 = needs a web session, not an
+  API key).
+- Community extensions (`shaftoe/pi-zai-usage`, `melon-hub/zai-usage-tracker`,
+  `guyinwonder168/opencode-glm-quota`) — none fetch balance.
+- Web/GitHub/SO search incl. Baidu/Sogou/CSDN/Zhihu — no public solution.
+
+The only way is scraping the **web cabinet** via the user's session cookies —
+fragile (cookies expire, breaks on any z.ai UI change, not portable to other
+users). Deliberately not implemented. Check the balance in the z.ai cabinet.
+
 ## How the endpoint was found
 
 GitHub search → [`shaftoe/pi-zai-usage`](https://github.com/shaftoe/pi-zai-usage)

@@ -133,6 +133,7 @@ class LimitSnapshot:
     # z.ai account usage (GLM / pi plan) — a SEPARATE provider from codex.
     # codex talks to OpenAI/ChatGPT; this is the z.ai/GLM subscription quota.
     zai_tokens: Optional[Window] = None
+    zai_weekly: Optional[Window] = None
     zai_time: Optional[Window] = None
     zai_level: Optional[str] = None
     zai_ts: Optional[float] = None
@@ -270,17 +271,46 @@ def _read_zai_key() -> Optional[str]:
     return None
 
 
+def _zai_window_minutes(lim: dict) -> int:
+    """Decode a z.ai limit's window length (minutes) from its unit/number.
+
+    z.ai limits now carry ``unit`` (a time-unit enum) and ``number`` (count):
+    observed unit=3 → HOUR, unit=6 → WEEK. For an unknown or absent unit we
+    fall back to classifying by how far ``nextResetTime`` sits from now (a
+    5-hour window always resets within ~5h; a weekly one can be up to 7d out).
+    """
+    per_unit_min = {3: 60, 4: 1440, 6: 10080}  # hour, day, week
+    try:
+        unit = int(lim.get("unit")) if lim and lim.get("unit") is not None else None
+    except (TypeError, ValueError):
+        unit = None
+    if unit in per_unit_min:
+        try:
+            number = int(lim.get("number") or 1)
+        except (TypeError, ValueError):
+            number = 1
+        return per_unit_min[unit] * number
+    reset = (int(lim.get("nextResetTime", 0) or 0)) // 1000 if lim else 0
+    if reset:
+        return 10080 if (reset - time.time()) > 6 * 3600 else 300
+    return 300
+
+
 def collect_zai() -> Optional[dict]:
     """Query the z.ai subscription usage API (with a short on-disk cache).
 
     Endpoint discovered via the shaftoe/pi-zai-usage extension:
     GET https://api.z.ai/api/monitor/usage/quota/limit  with the zai API key.
-    Returns::
+    Returns (two TOKENS_LIMIT windows now — 5h + weekly — plus the MCP one)::
 
-        {"data": {"limits": [{"type":"TOKENS_LIMIT","percentage":22,
-                              "nextResetTime":1784480862439},
-                             {"type":"TIME_LIMIT","percentage":0,...}],
-                  "level":"pro"}, "success": true}
+        {"data": {"limits": [
+            {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":79,
+             "nextResetTime":1785779102837},            # 5-hour cycle
+            {"type":"TOKENS_LIMIT","unit":6,"number":1,"percentage":15,
+             "nextResetTime":1786355862998},            # weekly cycle
+            {"type":"TIME_LIMIT","unit":5,"number":1,"percentage":2,
+             "nextResetTime":1787824662980,...}],        # MCP tools
+            "level":"pro"}, "success": true}
     """
     # serve from cache if fresh (genmon ticks every 30s; z.ai needn't be hit
     # that often). Cache stores JSON primitives; Windows are rebuilt on return.
@@ -308,18 +338,35 @@ def collect_zai() -> Optional[dict]:
         return None
     data = payload.get("data") or {}
     limits = data.get("limits") or []
-    tokens = next((l for l in limits if l.get("type") == "TOKENS_LIMIT"), None)
+
+    # z.ai now returns up to two TOKENS_LIMIT windows: a 5-hour rolling
+    # cycle (unit=3/HOUR, number=5) and a weekly cycle (unit=6/WEEK,
+    # number=1). Tell them apart by window length, not by list order.
+    token_limits = [l for l in limits if l.get("type") == "TOKENS_LIMIT"]
+    weekly = next(
+        (l for l in token_limits if 9900 <= _zai_window_minutes(l) <= 10300),
+        None,
+    )
+    five_h = next(
+        (l for l in token_limits
+         if l is not weekly and 250 <= _zai_window_minutes(l) <= 350),
+        None,
+    )
+    if five_h is None:  # back-compat: old API with a single TOKENS_LIMIT
+        five_h = next((l for l in token_limits if l is not weekly), None)
     time_l = next((l for l in limits if l.get("type") == "TIME_LIMIT"), None)
 
     def prim(lim):
         return {
             "pct": float(lim.get("percentage", 0) or 0) if lim else None,
             "reset": (int(lim.get("nextResetTime", 0)) // 1000) if lim and lim.get("nextResetTime") else 0,
+            "win_min": _zai_window_minutes(lim) if lim else None,
         }
 
     cached = {
-        "tokens": prim(tokens),
-        "time": prim(time_l),
+        "tokens": prim(five_h),   # TOKENS_LIMIT 5h rolling ("plan usage")
+        "weekly": prim(weekly),   # TOKENS_LIMIT weekly cycle
+        "time": prim(time_l),     # TIME_LIMIT  MCP-tools quota
         "level": data.get("level"),
         "ts": time.time(),
     }
@@ -332,18 +379,19 @@ def collect_zai() -> Optional[dict]:
 
 
 def _build_zai_result(cached: dict) -> Optional[dict]:
-    def mk(lim: dict, weekly: bool) -> Optional[Window]:
+    def mk(lim: dict, default_win_min: int) -> Optional[Window]:
         if not lim or lim.get("pct") is None:
             return None
         return Window(
             used_percent=float(lim["pct"]),
-            window_minutes=10080 if weekly else 300,
+            window_minutes=int(lim.get("win_min") or default_win_min),
             resets_at=int(lim.get("reset", 0) or 0),
         )
 
     return {
-        "tokens": mk(cached.get("tokens"), weekly=False),  # TOKENS_LIMIT = 5h rolling ("plan usage")
-        "time": mk(cached.get("time"), weekly=True),        # TIME_LIMIT  = weekly tools quota (search/web-reader/zread)
+        "tokens": mk(cached.get("tokens"), 300),    # TOKENS_LIMIT 5h rolling ("plan usage")
+        "weekly": mk(cached.get("weekly"), 10080),  # TOKENS_LIMIT weekly cycle
+        "time": mk(cached.get("time"), 10080),      # TIME_LIMIT  MCP-tools quota (search/web-reader/zread)
         "level": cached.get("level"),
         "ts": float(cached.get("ts", 0) or 0),
     }
@@ -430,7 +478,7 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     now = now or time.time()
     parts = []
 
-    if not snap or not (snap.dominant or snap.zai_tokens):
+    if not snap or not (snap.dominant or snap.zai_tokens or snap.zai_weekly):
         parts.append("<bar>0</bar>")
         parts.append(f"<click>{_notify_click_command()}</click>")
         parts.append("<tool>z.ai — no data\nStart Codex / configure the z.ai key, then click to retry.</tool>")
@@ -438,11 +486,18 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
 
     codex_pct = snap.dominant.used_percent if snap.dominant else 0.0
     zai_pct = snap.zai_tokens.used_percent if snap.zai_tokens else 0.0
+    zai_weekly_pct = snap.zai_weekly.used_percent if snap.zai_weekly else 0.0
 
     # One native genmon <bar>. To show BOTH metrics as bars, add two genmon
-    # items: one with ZAI_BAR_METRIC=codex (default), one with =zai.
+    # items: one with ZAI_BAR_METRIC=codex (default), one with =zai (or
+    # =zai-weekly to drive the bar by the weekly window instead of the 5h).
     metric = os.environ.get("ZAI_BAR_METRIC", "codex").strip().lower()
-    bar_pct = zai_pct if metric in ("zai", "z.ai", "glm") else codex_pct
+    if metric in ("zai", "z.ai", "glm"):
+        bar_pct = zai_pct
+    elif metric in ("zai-weekly", "zai_weekly", "weekly"):
+        bar_pct = zai_weekly_pct
+    else:
+        bar_pct = codex_pct
     parts.append(f"<bar>{_clamp_bar(bar_pct)}</bar>")
     # Color the bar by threshold (genmon's <bar> is theme-blue by default).
     # genmon 4.3.0 supports a <css> tag styling the plugin widget tree.
@@ -458,7 +513,7 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
     # Rich tooltip — scoped to THIS bar's metric (codex OR z.ai), so the two
     # genmon items have DIFFERENT tooltips matching their bar.
     NL = chr(10)
-    is_zai = metric in ("zai", "z.ai", "glm")
+    is_zai = metric in ("zai", "z.ai", "glm", "zai-weekly", "zai_weekly", "weekly")
 
     def window_line(name: str, w: Optional[Window]) -> str:
         name_part = _pad_right(f"{name}:", 8)
@@ -485,8 +540,9 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
         header += ")"
         tip.append(f"<tt><b>{header}</b></tt>")
         tip.append("")
-        tip.append(window_line("5h", snap.zai_tokens))     # TOKENS_LIMIT = 5h rolling
-        tip.append(window_line("MCP", snap.zai_time))     # TIME_LIMIT = weekly MCP-tools quota (search/web-reader/zread)
+        tip.append(window_line("5h", snap.zai_tokens))      # TOKENS_LIMIT 5h rolling
+        tip.append(window_line("weekly", snap.zai_weekly))  # TOKENS_LIMIT weekly cycle
+        tip.append(window_line("MCP", snap.zai_time))       # TIME_LIMIT MCP-tools quota (search/web-reader/zread)
         tip.append("")
         tip.append(_pango(COLOR_DIM, f"live API · updated {_human_age(snap.zai_ts or snap.ts, now)}"))
     else:
@@ -589,7 +645,7 @@ def render_dual_bar_png(
 
 def format_text(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> str:
     now = now or time.time()
-    if not snap or not (snap.dominant or snap.zai_tokens):
+    if not snap or not (snap.dominant or snap.zai_tokens or snap.zai_weekly):
         return "z.ai: no data (start Codex / configure z.ai key)"
     lines = []
     # codex (ChatGPT)
@@ -611,11 +667,15 @@ def format_text(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> s
     lines.append(f"  updated {_human_age(snap.ts, now)}")
     lines.append(f"  source: {snap.source}")
     # z.ai (GLM)
-    if snap.zai_tokens or snap.zai_time:
+    if snap.zai_tokens or snap.zai_weekly or snap.zai_time:
         lines.append("")
         level = f", {snap.zai_level}" if snap.zai_level else ""
         lines.append(f"z.ai (GLM{level})")
-        for name, w in (("5h", snap.zai_tokens), ("MCP", snap.zai_time)):
+        for name, w in (
+            ("5h", snap.zai_tokens),
+            ("weekly", snap.zai_weekly),
+            ("MCP", snap.zai_time),
+        ):
             if w:
                 lines.append(
                     f"  {name:<7} {w.used_percent:>5.1f}%  "
@@ -659,6 +719,17 @@ def format_json(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> s
                 }
                 if snap.credits
                 else None
+            ),
+            "zai": (
+                None
+                if not (snap.zai_weekly or snap.zai_tokens or snap.zai_time)
+                else {
+                    "level": snap.zai_level,
+                    "observed_at": int(snap.zai_ts) if snap.zai_ts else None,
+                    "weekly": win(snap.zai_weekly),
+                    "tokens_5h": win(snap.zai_tokens),
+                    "mcp_time": win(snap.zai_time),
+                }
             ),
         },
         ensure_ascii=False,
@@ -791,6 +862,7 @@ def main(argv=None) -> int:
             if snap is None:
                 snap = LimitSnapshot(source="zai", ts=zai["ts"])
             snap.zai_tokens = zai["tokens"]
+            snap.zai_weekly = zai["weekly"]
             snap.zai_time = zai["time"]
             snap.zai_level = zai["level"]
             snap.zai_ts = zai["ts"]

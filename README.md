@@ -6,9 +6,9 @@ no SNI, no compiled plugin):
 
 - **codex** (OpenAI/ChatGPT) — the rolling 5-hour / weekly caps the
   [OpenAI Codex CLI][codex] hits. Read from Codex rollout logs (zero quota).
-- **z.ai / GLM** (pi) — the 5-hour rolling `TOKENS_LIMIT` and weekly
-  `TIME_LIMIT` from the [z.ai][zai] account API (the "plan usage" you see in
-  the web cabinet).
+- **z.ai / GLM** (pi) — the 5-hour rolling `TOKENS_LIMIT`, the weekly
+  `TOKENS_LIMIT`, and the MCP-tools `TIME_LIMIT` from the [z.ai][zai] account
+  API (the "plan usage" you see in the web cabinet).
 
 Each is its own panel bar, colored green → orange → red by threshold, with a
 hover tooltip scoped to that provider. Click → desktop notification.
@@ -16,9 +16,9 @@ hover tooltip scoped to that provider. Click → desktop notification.
 ```
  panel:            hover (codex):             hover (z.ai):
  ┌───┐ codex        codex (ChatGPT)            z.ai (GLM, pro)
- └───┘              weekly 75% resets in 5d    5h      54% resets in 37m
- ┌───┐ z.ai         credits balance 0         weekly   0% resets in 7d
- └───┘
+ └───┘              weekly  75% resets in 5d    weekly  16% resets in 6d
+ ┌───┐ z.ai         credits balance 0          5h      80% resets in 59m
+ └───┘                                          MCP      2% resets in 23d
 ```
 
 ## How the hover tooltip works (the key insight)
@@ -68,6 +68,10 @@ the panel — one per metric:
    ```
    env ZAI_BAR_METRIC=zai /usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_limits.py --format genmon
    ```
+
+   Want the z.ai bar driven by the **weekly** window instead of the 5-hour one?
+   Set `ZAI_BAR_METRIC=zai-weekly`. Either way the hover tooltip shows all
+   three windows (weekly / 5h / MCP).
 
 Period `30` for both. Each item's hover tooltip shows only its own provider's
 breakdown; the `<bar>` is colored green/orange/red by threshold automatically

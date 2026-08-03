@@ -21,9 +21,13 @@ account-usage endpoint.
   "msg": "Operation successful",
   "data": {
     "limits": [
-      { "type": "TIME_LIMIT",  "percentage": 0,  "nextResetTime": 1785148414994,
+      { "type": "TIME_LIMIT",  "unit": 5, "number": 1, "percentage": 2,
+        "nextResetTime": 1787824662980,
         "usageDetails": [{"modelCode":"search-prime",...},{"modelCode":"web-reader",...},{"modelCode":"zread",...}] },
-      { "type": "TOKENS_LIMIT","percentage": 22, "nextResetTime": 1784480862439 }
+      { "type": "TOKENS_LIMIT","unit": 3, "number": 5, "percentage": 79,
+        "nextResetTime": 1785779102837 },
+      { "type": "TOKENS_LIMIT","unit": 6, "number": 1, "percentage": 15,
+        "nextResetTime": 1786355862998 }
     ],
     "level": "pro"
   },
@@ -35,15 +39,22 @@ account-usage endpoint.
 
 Source: **`docs.z.ai/devpack/faq`** + **`docs.z.ai/devpack/usage-policy`**.
 
-### `TOKENS_LIMIT` → the 5-hour prompt/token cycle ("plan usage")
+### `TOKENS_LIMIT` → two prompt/token windows (5-hour **and** weekly)
 
-Official FAQ:
-> «Lite Plan: Up to ~80 prompts every 5 hours. Pro Plan: Up to ~400 prompts
-> every 5 hours. Max Plan: Up to ~1600 prompts every 5 hours… wait until the
-> **5-hour cycle** for it to refresh.»
+The endpoint now returns **up to two** `TOKENS_LIMIT` entries, told apart by
+their `unit` + `number` fields (window length), not by list order:
 
-This is the percentage shown as "plan usage" in the z.ai web cabinet. Labeled
-**`5h`** in the widget.
+- **5-hour rolling cycle** — `unit: 3` (HOUR), `number: 5`. Official FAQ:
+  > «Lite Plan: Up to ~80 prompts every 5 hours. Pro Plan: Up to ~400 prompts
+  > every 5 hours. Max Plan: Up to ~1600 prompts every 5 hours… wait until the
+  > **5-hour cycle** for it to refresh.»
+  This is the percentage shown as "plan usage" in the z.ai web cabinet.
+  Labeled **`5h`** in the widget.
+
+- **Weekly cycle** — `unit: 6` (WEEK), `number: 1`. The 7-day subscription
+  quota the FAQ describes as «refreshed/reset on a 7-day cycle from order
+  time». Labeled **`weekly`** in the widget. (This entry used not to appear;
+  it was added by z.ai after this widget first shipped.)
 
 ### `TIME_LIMIT` → the weekly quota for MCP-tools only
 
@@ -56,12 +67,14 @@ i.e. the MCP tools (Vision / Web Search / Web Reader). FAQ:
 It resets on a 7-day cycle. Labeled **`MCP`** in the widget. This is **not** the
 main subscription quota — it's the MCP-tools weekly quota.
 
-### Weekly subscription quota
+### Historical note: the weekly quota was once missing
 
-FAQ mentions a weekly quota «refreshed/reset on a 7-day cycle» from order time,
-but `/quota/limit` does **not** return it as a separate entry. To see 7-day /
-30-day *usage* (not a limit), z.ai exposes `/api/monitor/usage/model-usage
-?startTime=…&endTime=…` (used by `melon-hub/zai-usage-tracker`).
+Earlier (when this widget first shipped) `/quota/limit` returned only a single
+`TOKENS_LIMIT` and **not** the weekly quota. z.ai later added a second
+`TOKENS_LIMIT` entry (`unit: 6` / WEEK), which the widget now shows as
+**`weekly`**. For 7-day/30-day *usage* breakdowns (not the limits), z.ai also
+exposes `/api/monitor/usage/model-usage?startTime=…&endTime=…`
+(used by `melon-hub/zai-usage-tracker`).
 
 ## `nextResetTime`
 

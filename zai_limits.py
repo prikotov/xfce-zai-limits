@@ -35,10 +35,14 @@ Exit codes
 from __future__ import annotations
 
 import argparse
+import fcntl
 import glob
 import json
 import math
 import os
+import select
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -50,6 +54,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 DEFAULT_CODEX_DIR = "~/.codex/sessions"
+CODEX_USAGE_CACHE_PATH = os.environ.get("CODEX_USAGE_CACHE", "/tmp/codex-usage-cache.json")
+CODEX_USAGE_CACHE_TTL = int(os.environ.get("CODEX_USAGE_CACHE_TTL", "25"))
+CODEX_USAGE_LOCK_PATH = CODEX_USAGE_CACHE_PATH + ".lock"
 
 # Color thresholds for the *used* percentage of the dominant window.
 WARN_PCT = float(os.environ.get("ZAI_LIMITS_WARN", "70"))
@@ -130,6 +137,9 @@ class LimitSnapshot:
     credits: Optional[Credits] = None
     limit_id: Optional[str] = None
     plan_type: Optional[str] = None
+    # Per-model buckets returned alongside the account-wide ``codex`` bucket
+    # by Codex's app-server (for example GPT-5.3-Codex-Spark).
+    model_limits: dict[str, Window] = field(default_factory=dict)
     # z.ai account usage (GLM / pi plan) — a SEPARATE provider from codex.
     # codex talks to OpenAI/ChatGPT; this is the z.ai/GLM subscription quota.
     zai_tokens: Optional[Window] = None
@@ -204,7 +214,19 @@ def _parse_iso(ts_raw) -> Optional[float]:
 
 
 def collect_codex(codex_dir: str = DEFAULT_CODEX_DIR) -> Optional[LimitSnapshot]:
-    """Collect the freshest rate-limit snapshot from Codex rollout logs."""
+    """Collect the current main Codex limit, falling back to rollout logs.
+
+    Recent Codex versions log the rate limit for the model used in a turn.  For
+    example, GPT-5.3-Codex-Spark has its own 100%-remaining bucket, while the
+    account-wide ``codex`` bucket is the weekly figure shown on the Usage page.
+    The app-server exposes the latter through its supported local protocol.
+    """
+    live = _collect_codex_live()
+    if live:
+        return live
+
+    # Older Codex installations have no app-server endpoint.  Their rollout
+    # logs are still useful as a no-network fallback.
     files = _iter_rollouts_newest_first(codex_dir)
     for path in files[:MAX_FILES_TO_SCAN]:
         hit = _last_rate_limit_in_file(path)
@@ -216,6 +238,175 @@ def collect_codex(codex_dir: str = DEFAULT_CODEX_DIR) -> Optional[LimitSnapshot]
             snap.source = f"codex:{os.path.basename(path)}"
             return snap
     return None
+
+
+def _codex_bin() -> Optional[str]:
+    """Find the Codex CLI even when genmon starts with a reduced PATH."""
+    candidates = [
+        os.environ.get("CODEX_BIN"),
+        shutil.which("codex"),
+        os.path.expanduser("~/.npm-global/bin/codex"),
+    ]
+    return next((path for path in candidates if path and os.path.isfile(path)), None)
+
+
+def _read_json_cache(path: str, ttl: int, allow_stale: bool = False) -> Optional[dict]:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cached = json.load(fh)
+        if allow_stale or time.time() - float(cached.get("ts", 0)) <= ttl:
+            return cached
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def _snapshot_from_app_server(payload: dict, ts: float) -> Optional[LimitSnapshot]:
+    """Convert ``account/rateLimits/read``'s camelCase response."""
+    rl = payload.get("rateLimits") or {}
+    if not rl:
+        return None
+
+    def window(raw: Optional[dict]) -> Optional[Window]:
+        if not raw:
+            return None
+        try:
+            return Window(
+                used_percent=float(raw.get("usedPercent", 0) or 0),
+                window_minutes=int(raw.get("windowDurationMins", 0) or 0),
+                resets_at=int(raw.get("resetsAt", 0) or 0),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    primary, secondary = window(rl.get("primary")), window(rl.get("secondary"))
+    if not primary and not secondary:
+        return None
+    credits_raw = rl.get("credits")
+    credits = None
+    if credits_raw:
+        credits = Credits.from_raw(
+            {
+                "has_credits": credits_raw.get("hasCredits"),
+                "unlimited": credits_raw.get("unlimited"),
+                "balance": credits_raw.get("balance"),
+            }
+        )
+    model_limits = {}
+    for limit_id, model_rl in (payload.get("rateLimitsByLimitId") or {}).items():
+        if limit_id == "codex" or not isinstance(model_rl, dict):
+            continue
+        model_window = window(model_rl.get("primary"))
+        name = model_rl.get("limitName") or limit_id
+        if model_window and isinstance(name, str):
+            model_limits[name] = model_window
+
+    return LimitSnapshot(
+        source="codex:live",
+        ts=ts,
+        primary=primary,
+        secondary=secondary,
+        credits=credits,
+        limit_id=rl.get("limitId"),
+        plan_type=rl.get("planType"),
+        model_limits=model_limits,
+    )
+
+
+def _collect_codex_live() -> Optional[LimitSnapshot]:
+    """Serialize overlapping Codex refreshes.
+
+    A slow genmon tick or a manual invocation can overlap the next refresh.
+    Avoid starting two app-servers against Codex's coordination files.
+    """
+    cached = _read_json_cache(CODEX_USAGE_CACHE_PATH, CODEX_USAGE_CACHE_TTL)
+    if cached:
+        return _snapshot_from_app_server(cached.get("payload") or {}, cached["ts"])
+    try:
+        with open(CODEX_USAGE_LOCK_PATH, "a", encoding="utf-8") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            # The other widget may have refreshed while we waited.
+            cached = _read_json_cache(CODEX_USAGE_CACHE_PATH, CODEX_USAGE_CACHE_TTL)
+            if cached:
+                return _snapshot_from_app_server(cached.get("payload") or {}, cached["ts"])
+            return _refresh_codex_live()
+    except OSError:
+        return _refresh_codex_live()
+
+
+def _refresh_codex_live() -> Optional[LimitSnapshot]:
+    """Read the account-wide limit from Codex's local app-server protocol."""
+    def stale_snapshot() -> Optional[LimitSnapshot]:
+        stale = _read_json_cache(CODEX_USAGE_CACHE_PATH, CODEX_USAGE_CACHE_TTL, allow_stale=True)
+        if stale:
+            return _snapshot_from_app_server(stale.get("payload") or {}, stale["ts"])
+        return None
+
+    cached = _read_json_cache(CODEX_USAGE_CACHE_PATH, CODEX_USAGE_CACHE_TTL)
+    if cached:
+        return _snapshot_from_app_server(cached.get("payload") or {}, cached["ts"])
+
+    codex = _codex_bin()
+    if not codex:
+        return stale_snapshot()
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            [codex, "app-server", "--stdio"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+
+        def send(message: dict) -> None:
+            assert proc and proc.stdin
+            proc.stdin.write(json.dumps(message) + "\n")
+            proc.stdin.flush()
+
+        def receive(request_id: int, timeout: float) -> Optional[dict]:
+            assert proc and proc.stdout
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                ready, _, _ = select.select([proc.stdout], [], [], deadline - time.monotonic())
+                if not ready:
+                    break
+                message = json.loads(proc.stdout.readline())
+                if message.get("id") == request_id:
+                    return message.get("result")
+            return None
+
+        send({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "clientInfo": {"name": "zai-limits", "version": "1.0"},
+            "capabilities": {},
+        }})
+        if receive(1, 5) is None:
+            return stale_snapshot()
+        send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+        send({"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": None})
+        payload = receive(2, 10)
+        if not payload:
+            return stale_snapshot()
+        cached = {"ts": time.time(), "payload": payload}
+        try:
+            with open(CODEX_USAGE_CACHE_PATH, "w", encoding="utf-8") as fh:
+                json.dump(cached, fh)
+        except OSError:
+            pass
+        return _snapshot_from_app_server(payload, cached["ts"])
+    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
+        # Do not make the panel appear empty just because Codex was closed or
+        # its app-server is momentarily unavailable.  Keep the last known
+        # account-wide value; the tooltip makes its age explicit.
+        return stale_snapshot()
+    finally:
+        if proc:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
 
 
 def _snapshot_from_codex_rate_limits(
@@ -498,6 +689,7 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
         bar_pct = zai_weekly_pct
     else:
         bar_pct = codex_pct
+
     parts.append(f"<bar>{_clamp_bar(bar_pct)}</bar>")
     # Color the bar by threshold (genmon's <bar> is theme-blue by default).
     # genmon 4.3.0 supports a <css> tag styling the plugin widget tree.
@@ -559,6 +751,8 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
         for w in (snap.primary, snap.secondary):
             if w and not w.is_weekly and not w.is_five_hour:
                 tip.append(window_line(w.label, w))
+        for name, w in snap.model_limits.items():
+            tip.append(window_line(name, w))
         if snap.credits:
             tip.append("")
             if snap.credits.unlimited:
@@ -569,7 +763,8 @@ def format_genmon(snap: Optional[LimitSnapshot], now: Optional[float] = None) ->
                 cred = _pango(COLOR_DIM, f"balance {_fmt_balance(snap.credits.balance)}")
             tip.append(_pango(COLOR_LABEL, _pad_right("credits:", 8)) + NBSP + cred)
         tip.append("")
-        tip.append(_pango(COLOR_DIM, f"updated {_human_age(snap.ts, now)} · from Codex logs"))
+        origin = "live Codex usage" if snap.source == "codex:live" else "Codex logs"
+        tip.append(_pango(COLOR_DIM, f"updated {_human_age(snap.ts, now)} · {origin}"))
 
     parts.append(f"<tool>{NL.join(tip)}</tool>")
     return "\n".join(parts)
@@ -666,6 +861,12 @@ def format_text(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> s
         )
     lines.append(f"  updated {_human_age(snap.ts, now)}")
     lines.append(f"  source: {snap.source}")
+    for name, w in snap.model_limits.items():
+        lines.append(
+            f"  {name:<20} {w.used_percent:>5.1f}%  "
+            f"resets in {_human_remaining(w.resets_at, now)}  "
+            f"({_fmt_ts(w.resets_at)})"
+        )
     # z.ai (GLM)
     if snap.zai_tokens or snap.zai_weekly or snap.zai_time:
         lines.append("")
@@ -720,6 +921,7 @@ def format_json(snap: Optional[LimitSnapshot], now: Optional[float] = None) -> s
                 if snap.credits
                 else None
             ),
+            "model_limits": {name: win(w) for name, w in snap.model_limits.items()},
             "zai": (
                 None
                 if not (snap.zai_weekly or snap.zai_tokens or snap.zai_time)
@@ -853,10 +1055,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
-    snap = collect_codex(args.codex_dir)
+    metric = os.environ.get("ZAI_BAR_METRIC", "codex").strip().lower()
+    zai_metrics = ("zai", "z.ai", "glm", "zai-weekly", "zai_weekly", "weekly")
+    # Each genmon item has one provider.  Do not query the unrelated provider:
+    # the z.ai widget must never start Codex app-server, and the Codex widget
+    # must never call the z.ai API.  Text/JSON modes intentionally report both.
+    genmon_zai = args.format == "genmon" and metric in zai_metrics and not args.notify
+    genmon_codex = args.format == "genmon" and metric not in zai_metrics and not args.notify
+
+    snap = None if genmon_zai else collect_codex(args.codex_dir)
 
     # z.ai (GLM) subscription usage — separate provider, live API.
-    if not args.skip_zai:
+    if not args.skip_zai and not genmon_codex:
         zai = collect_zai()
         if zai:
             if snap is None:

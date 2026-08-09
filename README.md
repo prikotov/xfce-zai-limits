@@ -40,12 +40,13 @@ shows only the bar.
 
 ## How the data is obtained (zero quota cost)
 
-Codex already receives a `rate_limits` snapshot from z.ai on every model turn
-and writes it into its rollout logs at
-`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. This tool finds the freshest
-snapshot and renders it — **no API call, no token spent, no key**. The number
-refreshes when Codex makes a request (which is when the limit actually
-changes); the tooltip always shows the snapshot age.
+The widget reads the account-wide Usage bucket through the local `codex
+app-server` protocol — the same supported protocol used by Codex itself. This
+keeps the value aligned with the Usage page even when the active model has a
+separate limit, such as GPT-5.3-Codex-Spark. The response is cached for 25
+seconds. If app-server is unavailable, the widget falls back to the freshest
+`rate_limits` snapshot in
+`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
 
 ## Requirements
 

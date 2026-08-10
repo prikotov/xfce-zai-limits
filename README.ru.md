@@ -52,11 +52,14 @@ gtk_widget_set_tooltip_markup(eventbox, g_strndup(begin + 6, ...));
    ```
    /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon
    ```
-   Если Codex работает через прокси, пропиши его прямо в окружении этого
-   виджета — тогда он не зависит от запущенных процессов Codex:
+   Если Codex работает через прокси, сохрани его в приватном env-файле:
+   ```bash
+   install -d -m 700 ~/.config/xfce-zai-limits
+   printf '%s\n' 'ALL_PROXY=https://user:password@proxy.example:443' > ~/.config/xfce-zai-limits/codex.env
+   chmod 600 ~/.config/xfce-zai-limits/codex.env
    ```
-   env ALL_PROXY=https://user:password@proxy.example:443 /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon
-   ```
+   Виджет читает этот файл самостоятельно и не зависит от запущенных процессов
+   Codex. Другой путь можно задать переменной `CODEX_ENV_FILE`.
 2. **z.ai** — Command (обрати внимание на `ZAI_BAR_METRIC=zai`):
    ```
    env ZAI_BAR_METRIC=zai /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon

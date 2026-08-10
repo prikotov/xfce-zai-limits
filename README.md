@@ -65,11 +65,14 @@ the panel — one per metric:
    ```
    /usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_limits.py --format genmon
    ```
-   If Codex needs a proxy, set it explicitly in this widget's environment so
-   it does not depend on any running Codex process:
+   If Codex needs a proxy, store it in the private env file:
+   ```bash
+   install -d -m 700 ~/.config/xfce-zai-limits
+   printf '%s\n' 'ALL_PROXY=https://user:password@proxy.example:443' > ~/.config/xfce-zai-limits/codex.env
+   chmod 600 ~/.config/xfce-zai-limits/codex.env
    ```
-   env ALL_PROXY=https://user:password@proxy.example:443 /usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_limits.py --format genmon
-   ```
+   The widget reads this file itself and does not depend on a running Codex
+   process. Set `CODEX_ENV_FILE` to use a different path.
 2. **z.ai** item — Command (note the `ZAI_BAR_METRIC=zai` env):
    ```
    env ZAI_BAR_METRIC=zai /usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_limits.py --format genmon

@@ -57,6 +57,10 @@ DEFAULT_CODEX_DIR = "~/.codex/sessions"
 CODEX_USAGE_CACHE_PATH = os.environ.get("CODEX_USAGE_CACHE", "/tmp/codex-usage-cache.json")
 CODEX_USAGE_CACHE_TTL = int(os.environ.get("CODEX_USAGE_CACHE_TTL", "25"))
 CODEX_USAGE_LOCK_PATH = CODEX_USAGE_CACHE_PATH + ".lock"
+CODEX_ENV_FILE = os.environ.get(
+    "CODEX_ENV_FILE",
+    os.path.join(os.environ.get("XDG_CONFIG_HOME", "~/.config"), "xfce-zai-limits", "codex.env"),
+)
 
 # Color thresholds for the *used* percentage of the dominant window.
 WARN_PCT = float(os.environ.get("ZAI_LIMITS_WARN", "70"))
@@ -250,6 +254,33 @@ def _codex_bin() -> Optional[str]:
     return next((path for path in candidates if path and os.path.isfile(path)), None)
 
 
+def _codex_child_env() -> dict[str, str]:
+    """Load private Codex network settings from the widget's env file."""
+    env = os.environ.copy()
+    allowed = {
+        "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
+        "all_proxy", "https_proxy", "http_proxy", "no_proxy",
+    }
+    try:
+        with open(os.path.expanduser(CODEX_ENV_FILE), encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith("export "):
+                    line = line[7:].lstrip()
+                name, sep, value = line.partition("=")
+                name, value = name.strip(), value.strip()
+                if not sep or name not in allowed:
+                    continue
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                    value = value[1:-1]
+                env[name] = value
+    except OSError:
+        pass
+    return env
+
+
 def _read_json_cache(path: str, ttl: int, allow_stale: bool = False) -> Optional[dict]:
     try:
         with open(path, encoding="utf-8") as fh:
@@ -369,6 +400,7 @@ def _refresh_codex_live() -> Optional[LimitSnapshot]:
             stderr=subprocess.DEVNULL,
             text=True,
             bufsize=1,
+            env=_codex_child_env(),
         )
 
         def send(message: dict) -> None:

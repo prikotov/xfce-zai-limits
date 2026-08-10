@@ -250,75 +250,6 @@ def _codex_bin() -> Optional[str]:
     return next((path for path in candidates if path and os.path.isfile(path)), None)
 
 
-def _codex_child_env() -> dict[str, str]:
-    """Build the app-server environment, including the desktop proxy.
-
-    XFCE panel may have been started before the proxy was imported into the
-    user systemd environment.  Interactive Codex sessions then work while the
-    same app-server launched by genmon has no network route and silently falls
-    back to an old cache.  Read only proxy variables from systemd; credentials
-    stay in the process environment and are never written by this widget.
-    """
-    env = os.environ.copy()
-    proxy_names = {
-        "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY",
-        "all_proxy", "https_proxy", "http_proxy", "no_proxy",
-    }
-    try:
-        result = subprocess.run(
-            ["systemctl", "--user", "show-environment"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=2,
-            check=False,
-        )
-        for line in result.stdout.splitlines():
-            name, sep, value = line.partition("=")
-            if sep and name in proxy_names and value:
-                env[name] = value
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-    # On this desktop Codex is commonly launched as
-    # ``ALL_PROXY=... codex``.  That variable belongs to the Codex process, not
-    # to the already-running XFCE panel or systemd user manager.  Reuse proxy
-    # variables from the newest live Codex process so genmon follows the same
-    # network route regardless of which terminal/session is currently active.
-    if not any(env.get(name) for name in proxy_names):
-        candidates = []
-        for stat_path in glob.glob("/proc/[0-9]*/stat"):
-            proc_dir = os.path.dirname(stat_path)
-            try:
-                with open(proc_dir + "/cmdline", "rb") as fh:
-                    cmdline = fh.read()
-                if b"codex" not in cmdline:
-                    continue
-                with open(stat_path, encoding="utf-8") as fh:
-                    fields = fh.read().split()
-                candidates.append((int(fields[21]), proc_dir))
-            except (OSError, ValueError, IndexError):
-                continue
-        for _, proc_dir in sorted(candidates, reverse=True):
-            try:
-                with open(proc_dir + "/environ", "rb") as fh:
-                    raw_env = fh.read().split(b"\0")
-            except OSError:
-                continue
-            found = {}
-            for item in raw_env:
-                name_raw, sep, value_raw = item.partition(b"=")
-                if not sep:
-                    continue
-                name = name_raw.decode("ascii", errors="ignore")
-                if name in proxy_names and value_raw:
-                    found[name] = value_raw.decode("utf-8", errors="replace")
-            if found:
-                env.update(found)
-                break
-    return env
-
-
 def _read_json_cache(path: str, ttl: int, allow_stale: bool = False) -> Optional[dict]:
     try:
         with open(path, encoding="utf-8") as fh:
@@ -438,7 +369,6 @@ def _refresh_codex_live() -> Optional[LimitSnapshot]:
             stderr=subprocess.DEVNULL,
             text=True,
             bufsize=1,
-            env=_codex_child_env(),
         )
 
         def send(message: dict) -> None:

@@ -52,6 +52,11 @@ gtk_widget_set_tooltip_markup(eventbox, g_strndup(begin + 6, ...));
    ```
    /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon
    ```
+   Если Codex работает через прокси, пропиши его прямо в окружении этого
+   виджета — тогда он не зависит от запущенных процессов Codex:
+   ```
+   env ALL_PROXY=https://user:password@proxy.example:443 /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon
+   ```
 2. **z.ai** — Command (обрати внимание на `ZAI_BAR_METRIC=zai`):
    ```
    env ZAI_BAR_METRIC=zai /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon

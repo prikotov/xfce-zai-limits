@@ -28,9 +28,12 @@ gtk_widget_set_tooltip_markup(eventbox, g_strndup(begin + 6, ...));
 
 ## Откуда данные (без траты квоты)
 
-Codex и так получает снимок `rate_limits` от z.ai на каждом запросе и пишет его
-в rollout-логи `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Виджет находит
-самый свежий снимок и рисует. **Без API-запроса, без токенов, без ключа.**
+Виджет запрашивает account-wide лимит через локальный `codex app-server` — тот
+же поддерживаемый протокол, который использует сам Codex. Поэтому значение
+совпадает со страницей Usage, в том числе когда у активной модели есть свой
+отдельный лимит (например, GPT-5.3-Codex-Spark). Ответ кэшируется на 25 секунд.
+Если app-server недоступен, используется последний снимок из rollout-логов
+`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
 
 ## Требования
 
@@ -49,6 +52,14 @@ Codex и так получает снимок `rate_limits` от z.ai на ка�
    ```
    /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon
    ```
+   Если Codex работает через прокси, сохрани его в приватном env-файле:
+   ```bash
+   install -d -m 700 ~/.config/xfce-zai-limits
+   printf '%s\n' 'ALL_PROXY=https://user:password@proxy.example:443' > ~/.config/xfce-zai-limits/codex.env
+   chmod 600 ~/.config/xfce-zai-limits/codex.env
+   ```
+   Виджет читает этот файл самостоятельно и не зависит от запущенных процессов
+   Codex. Другой путь можно задать переменной `CODEX_ENV_FILE`.
 2. **z.ai** — Command (обрати внимание на `ZAI_BAR_METRIC=zai`):
    ```
    env ZAI_BAR_METRIC=zai /usr/bin/python3 /home/<вы>/src/xfce-zai-limits/zai_limits.py --format genmon

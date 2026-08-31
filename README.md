@@ -40,12 +40,13 @@ shows only the bar.
 
 ## How the data is obtained (zero quota cost)
 
-Codex already receives a `rate_limits` snapshot from z.ai on every model turn
-and writes it into its rollout logs at
-`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. This tool finds the freshest
-snapshot and renders it — **no API call, no token spent, no key**. The number
-refreshes when Codex makes a request (which is when the limit actually
-changes); the tooltip always shows the snapshot age.
+The widget reads the account-wide Usage bucket through the local `codex
+app-server` protocol — the same supported protocol used by Codex itself. This
+keeps the value aligned with the Usage page even when the active model has a
+separate limit, such as GPT-5.3-Codex-Spark. The response is cached for 25
+seconds. If app-server is unavailable, the widget falls back to the freshest
+`rate_limits` snapshot in
+`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
 
 ## Requirements
 
@@ -64,6 +65,14 @@ the panel — one per metric:
    ```
    /usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_limits.py --format genmon
    ```
+   If Codex needs a proxy, store it in the private env file:
+   ```bash
+   install -d -m 700 ~/.config/xfce-zai-limits
+   printf '%s\n' 'ALL_PROXY=https://user:password@proxy.example:443' > ~/.config/xfce-zai-limits/codex.env
+   chmod 600 ~/.config/xfce-zai-limits/codex.env
+   ```
+   The widget reads this file itself and does not depend on a running Codex
+   process. Set `CODEX_ENV_FILE` to use a different path.
 2. **z.ai** item — Command (note the `ZAI_BAR_METRIC=zai` env):
    ```
    env ZAI_BAR_METRIC=zai /usr/bin/python3 /home/<you>/src/xfce-zai-limits/zai_limits.py --format genmon
